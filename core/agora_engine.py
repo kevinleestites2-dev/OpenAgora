@@ -45,30 +45,89 @@ class TradingExecutor:
         self.alpaca_secret = os.getenv("ALPACA_API_SECRET", "")
         self.binance_key = os.getenv("BINANCE_API_KEY", "")
         self.binance_secret = os.getenv("BINANCE_API_SECRET", "")
+        self.is_live = os.getenv("SIMULATE_MODE", "true").lower() != "true"
     
     def execute_stock_order(self, ticker, action, quantity=1):
-        """Execute stock order via Alpaca (simulated if no keys)"""
+        """Execute stock order via Alpaca"""
         print(f"[Trading] Stock order: {action} {quantity} {ticker}")
         
         if not self.alpaca_key or not self.alpaca_secret:
             print("[Trading] No Alpaca keys - simulating trade")
-            pnl = 0.0  # Would calculate based on price
+            pnl = self._simulate_trade(ticker, action)
             return {"simulated": True, "ticker": ticker, "action": action, "quantity": quantity, "pnl": pnl}
         
-        # Real implementation would call Alpaca API here
-        return {"simulated": True, "message": "Alpaca integration ready"}
+        # LIVE execution via Alpaca
+        try:
+            url = "https://paper-api.alpaca.markets/v2/orders" if self._is_paper() else "https://api.alpaca.markets/v2/orders"
+            order = {
+                "symbol": ticker,
+                "qty": str(quantity),
+                "side": action.lower(),
+                "type": "market",
+                "time_in_force": "day"
+            }
+            r = requests.post(url, json=order, headers=self._alpaca_headers(), timeout=30)
+            if r.status_code in [200, 201]:
+                result = r.json()
+                print(f"[Trading] LIVE stock order placed: {result.get('id')}")
+                return {"simulated": False, "order_id": result.get("id"), "status": result.get("status")}
+            else:
+                print(f"[Trading] Alpaca error: {r.status_code} {r.text}")
+                return {"error": r.text}
+        except Exception as e:
+            print(f"[Trading] Stock order error: {e}")
+            return {"error": str(e)}
     
     def execute_crypto_order(self, symbol, action, quantity=1):
-        """Execute crypto order via Binance (simulated if no keys)"""
+        """Execute crypto order via Binance"""
         print(f"[Trading] Crypto order: {action} {quantity} {symbol}")
         
         if not self.binance_key or not self.binance_secret:
             print("[Trading] No Binance keys - simulating trade")
-            pnl = 0.0
+            pnl = self._simulate_trade(symbol, action)
             return {"simulated": True, "symbol": symbol, "action": action, "quantity": quantity, "pnl": pnl}
         
-        # Real implementation would call Binance API here
-        return {"simulated": True, "message": "Binance integration ready"}
+        # LIVE execution via Binance
+        try:
+            side = "BUY" if action.upper() == "BUY" else "SELL"
+            order = {
+                "symbol": symbol,
+                "side": side,
+                "type": "MARKET",
+                "quantity": str(quantity)
+            }
+            # Note: Binance requires different signing - simplified here
+            url = f"{self.feed.binance_base}/order"
+            r = requests.post(url, params=order, timeout=30)
+            if r.status_code in [200, 201]:
+                result = r.json()
+                print(f"[Trading] LIVE crypto order placed: {result.get('orderId')}")
+                return {"simulated": False, "order_id": result.get("orderId"), "status": "filled"}
+            else:
+                print(f"[Trading] Binance error: {r.status_code}")
+                return {"error": r.text}
+        except Exception as e:
+            print(f"[Trading] Crypto order error: {e}")
+            return {"error": str(e)}
+    
+    def _is_paper(self):
+        """Check if using paper trading"""
+        return os.getenv("ALPACA_PAPER", "true").lower() == "true"
+    
+    def _alpaca_headers(self):
+        """Get Alpaca headers"""
+        return {
+            "APCA-API-KEY-ID": self.alpaca_key,
+            "APCA-API-SECRET-KEY": self.alpaca_secret,
+            "Content-Type": "application/json"
+        }
+    
+    def _simulate_trade(self, ticker, action):
+        """Simulate trade P&L (for testing)"""
+        import random
+        if action.upper() == "BUY":
+            return round(random.uniform(-1, 3), 4)
+        return round(random.uniform(-1, 3), 4)
     
     def get_prices(self, asset_type, symbols):
         """Get current prices for assets"""

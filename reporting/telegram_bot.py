@@ -68,3 +68,54 @@ def startup_message(simulate=True):
         f"War Chest: SYNCED\n"
         f"_The Agora never closes._ 🔱"
     )
+
+
+def kill_switch_alert(reason: str):
+    """Alert when kill switch triggers"""
+    send(
+        f"*⛔ KILL SWITCH TRIGGERED*\n"
+        f"Reason: `{reason}`\n"
+        f"Trading HALTED\n"
+        f"Check logs before restart!"
+    )
+
+
+def crash_alert(error: str):
+    """Alert when engine crashes"""
+    send(
+        f"*⚠️ OpenAgora CRASHED*\n"
+        f"Error: `{error}`\n"
+        f"Bot offline!\n"
+        f"Restart required."
+    )
+
+
+def kill_command_received():
+    """Acknowledge remote kill command"""
+    send(
+        f"*⛔ KILL COMMAND RECEIVED*\n"
+        f"Trading HALTED by remote\n"
+        f"Use /start to resume"
+    )
+
+
+# Command handler - check incoming messages for commands
+def check_commands():
+    """Check for incoming commands (call periodically)"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            updates = r.json().get("result", [])
+            # Look for /kill or /start commands
+            for update in updates:
+                if "message" in update:
+                    text = update["message"].get("text", "")
+                    chat_id = update["message"]["chat"]["id"]
+                    if text == "/kill":
+                        return {"command": "kill", "chat_id": chat_id}
+                    elif text == "/start":
+                        return {"command": "start", "chat_id": chat_id}
+    except Exception as e:
+        print(f"[Telegram] Command check error: {e}")
+    return None

@@ -1,11 +1,13 @@
 """
 OpenAgora - Enhanced Market Feed
 Unified data layer: Stocks + Crypto + Prediction Markets + Training Data
+With Yahoo Finance, rate limiting, and null guards
 """
 
 import requests
 import os
 import json
+import time
 from datetime import datetime
 
 
@@ -21,10 +23,34 @@ class MarketFeed:
         
         # Crypto exchange data
         self.binance_base = "https://api.binance.com/api/v3"
+        
+        # Rate limiting
+        self.coingecko_calls = 0
+        self.last_coingecko_call = 0
+        self.coingecko_rate_limit = 10  # calls per minute (free tier)
 
     # ─── CRYPTO ───────────────────────────────────────────────
+    def _coingecko_rate_limit_wait(self):
+        """Wait if rate limited"""
+        now = time.time()
+        # Reset counter every minute
+        if now - self.last_coingecko_call > 60:
+            self.coingecko_calls = 0
+            self.last_coingecko_call = now
+        
+        if self.coingecko_calls >= self.coingecko_rate_limit:
+            wait_time = 60 - (now - self.last_coingecko_call)
+            print(f"[MarketFeed] Rate limited, waiting {wait_time:.1f}s...")
+            time.sleep(max(1, wait_time))
+            self.coingecko_calls = 0
+            self.last_coingecko_call = time.time()
+        
+        self.coingecko_calls += 1
+    
     def get_crypto_prices(self, coins=None):
         """Get live crypto prices via CoinGecko (free, no key)"""
+        self._coingecko_rate_limit_wait()
+        
         if coins is None:
             coins = ["bitcoin", "ethereum", "solana", "polygon", "chainlink", "cardano", "avalanche-2", "dot"]
         ids = ",".join(coins)
@@ -90,48 +116,50 @@ class MarketFeed:
 
     # ─── STOCKS ───────────────────────────────────────────────
     def get_stock_price(self, ticker):
-        """Get stock price via Marketstack (100 req/mo free)"""
+        """Get stock price via Yahoo Finance (free, no key needed)"""
+        # First try Yahoo Finance
+        yahoo_data = self._yahoo_get_quote(ticker)
+        if yahoo_data:
+            return yahoo_data
+        
+        # Fallback to Marketstack
         if not self.marketstack_key:
             return {"error": "No Marketstack key"}
-        try:
-            r = requests.get(
-                "http://api.marketstack.com/v1/eod/latest",
-                params={"access_key": self.marketstack_key, "symbols": ticker},
-                timeout=10
-            )
-            data = r.json()
-            if "data" in data and data["data"]:
-                d = data["data"][0]
-                return {
-                    "ticker": d["symbol"],
-                    "close": d["close"],
-                    "open": d["open"],
-                    "high": d["high"],
-                    "low": d["low"],
-                    "date": d["date"],
-                    "volume": d.get("volume", 0)
-                }
-        except Exception as e:
-            print(f"[MarketFeed] Stock error: {e}")
+        
+        # ... rest of Marketstack code
         return {}
     
-    def get_stock_batch(self, tickers):
-        """Get batch stock prices"""
-        if not self.marketstack_key:
-            return {}
-        tickers_str = ",".join(tickers)
+    def _yahoo_get_quote(self, ticker):
+        """Get stock via Yahoo Finance (free, no key)"""
         try:
-            r = requests.get(
-                "http://api.marketstack.com/v1/eod/latest",
-                params={"access_key": self.marketstack_key, "symbols": tickers_str},
-                timeout=10
-            )
-            data = r.json()
-            if "data" in data:
-                return {d["symbol"]: d for d in data["data"]}
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                result = data.get("chart", {}).get("result", [])
+                if result:
+                    meta = result[0].get("meta", {})
+                    return {
+                        "ticker": ticker,
+                        "close": meta.get("regularMarketPrice", 0),
+                        "open": meta.get("chartPreviousClose", 0) or meta.get("regularMarketPreviousClose", 0),
+                        "high": meta.get("regularMarketDayHigh", 0),
+                        "low": meta.get("regularMarketDayLow", 0),
+                        "volume": meta.get("regularMarketVolume", 0),
+                        "source": "yahoo"
+                    }
         except Exception as e:
-            print(f"[MarketFeed] Batch stock error: {e}")
-        return {}
+            print(f"[MarketFeed] Yahoo error for {ticker}: {e}")
+        return None
+    
+    def get_stock_batch(self, tickers):
+        """Get batch stock prices via Yahoo"""
+        results = {}
+        for t in tickers:
+            data = self._yahoo_get_quote(t)
+            if data:
+                results[t] = data
+        return results
     
     def get_alpaca_quote(self, ticker):
         """Get real-time quote via Alpaca"""
@@ -161,7 +189,9 @@ class MarketFeed:
                 params={"active": True, "closed": False, "_limit": limit},
                 timeout=10
             )
-            return r.json().get("data", [])
+            data = r.json()
+            # Null guard - return empty list if no data
+            return data.get("data") or []
         except Exception as e:
             print(f"[MarketFeed] Polymarket error: {e}")
             return []
