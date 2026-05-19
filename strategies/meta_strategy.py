@@ -2,10 +2,14 @@
 OpenAgora — Meta Strategy
 The self-adjusting brain. Weights shift based on EverOS memory.
 This is what makes OpenAgora Meta.
+Enhanced with AI Training Strategy integration.
 """
 
+import os
+import json
 from memory.everos_bridge import get_strategy_weights, add_lesson
 from core.market_feed import MarketFeed
+from strategies.training_strategy import get_training_strategy, record_training_outcome, get_training_stats
 import random
 
 
@@ -14,11 +18,15 @@ class MetaStrategy:
     Meta-recursive strategy selector.
     Uses EverOS memory to dynamically weight sub-strategies.
     Capital flows toward what's winning. Always evolving.
+    Now includes AI Training Strategy for self-improvement.
     """
 
     def __init__(self):
         self.feed = MarketFeed()
-        self.strategies = ["momentum", "arbitrage", "mean_reversion", "trend_follow"]
+        self.strategies = ["momentum", "arbitrage", "mean_reversion", "trend_follow", "training"]
+        
+        # Initialize training strategy for Q-learning
+        self.training = get_training_strategy()
 
     def select_strategy(self):
         """Pick strategy based on historical win-rate weights"""
@@ -83,25 +91,52 @@ class MetaStrategy:
         Full Meta cycle:
         1. Get market snapshot
         2. Select best strategy via EverOS weights
-        3. Generate signals
+        3. Generate signals (including trained AI signals)
         4. Return trade plan
+        5. Record outcomes for training
         """
         strategy = self.select_strategy()
         snapshot = self.feed.snapshot()
 
         crypto_signals = self.analyze_crypto(snapshot.get("crypto", {}))
         pred_signals = self.analyze_prediction_markets(snapshot.get("prediction_markets", []))
+        
+        # Training strategy analysis (Q-learning)
+        training_analysis = self.training.analyze_with_ai(snapshot.get("crypto", {}), "crypto")
+        training_signals = training_analysis.get("signals", [])
 
-        all_signals = crypto_signals + pred_signals
+        all_signals = crypto_signals + pred_signals + training_signals
         all_signals.sort(key=lambda x: x["confidence"], reverse=True)
 
         # Meta lesson — note what the market is showing
         if all_signals:
             top = all_signals[0]
             add_lesson(f"Top signal: {top['asset']} ({top['action']}) confidence={top['confidence']} via {strategy}")
+            
+            # Record training outcome
+            if strategy == "training":
+                state = training_analysis.get("state", "neutral")
+                action = training_analysis.get("action", "HOLD")
+                # This will be updated with actual P&L after trade executes
+                self._pending_training = {"state": state, "action": action}
 
         return {
             "strategy_selected": strategy,
             "signals": all_signals[:5],  # Top 5 signals
+            "training_state": training_analysis.get("state", "unknown"),
+            "training_action": training_analysis.get("action", "none"),
+            "training_stats": get_training_stats(),
             "timestamp": snapshot["timestamp"]
         }
+    
+    def record_trade_result(self, pnl):
+        """Record trade result for training learning"""
+        if hasattr(self, "_pending_training") and self._pending_training:
+            record_training_outcome(
+                self._pending_training["state"],
+                self._pending_training["action"],
+                pnl
+            )
+            # Decay epsilon for less exploration over time
+            self.training.decay_epsilon()
+            self._pending_training = None
