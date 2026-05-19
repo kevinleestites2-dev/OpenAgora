@@ -211,3 +211,40 @@ class MarketFeed:
         if asset_type == "crypto":
             return self.get_crypto_klines(symbol, interval, 500)
         return []
+
+    # ─── OPENSTOCK LAYER ──────────────────────────────────────
+    def get_stock_watchlist_snapshot(self):
+        """Pull live prices for all OpenStock watchlist symbols"""
+        from core.openstock_layer import get_watchlist_snapshot, check_alerts, get_watchlist_prices
+        from reporting.telegram_bot import send
+        snapshot = get_watchlist_snapshot()
+        # Run alert checks on every cycle
+        prices = {sym: d["price"] for sym, d in snapshot.items() if d.get("price", 0) > 0}
+        triggered = check_alerts(prices)
+        for alert in triggered:
+            msg = (
+                f"🚨 *OpenStock Alert Triggered*\n"
+                f"Symbol: `{alert['symbol']}`\n"
+                f"Condition: `{alert['condition']} ${alert['targetPrice']:.2f}`\n"
+                f"Current Price: `${alert['currentPrice']:.2f}`"
+            )
+            send(msg)
+            print(f"[OpenStock] Alert fired: {alert['symbol']} {alert['condition']} ${alert['targetPrice']}")
+        return snapshot
+
+    def get_stock_signals(self):
+        """Generate momentum signals from watchlist — OpenStock layer"""
+        from core.openstock_layer import get_watchlist_snapshot, generate_stock_signals
+        snapshot = get_watchlist_snapshot()
+        return generate_stock_signals(snapshot)
+
+    def full_snapshot(self):
+        """Complete snapshot: crypto + stocks (OpenStock) + prediction markets"""
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "crypto": self.get_crypto_prices(),
+            "trending": self.get_crypto_trending(),
+            "stocks": self.get_stock_watchlist_snapshot(),
+            "prediction_markets": self.get_poly_markets(5)
+        }
+
