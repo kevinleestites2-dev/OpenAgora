@@ -1,0 +1,29 @@
+services:
+  - name: open-agora
+    type: background
+    runtime: python
+    version: "3.11"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python core/agora_engine.py --mode simulate
+    envVars:
+      - key: SIMULATE_MODE
+        value: "true"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: ALPACA_PAPER
+        value: "true"
+      - key: STOP_LOSS_PERCENT
+        value: "5"
+      - key: DAILY_DRAWDOWN_LIMIT_PERCENT
+        value: "10"
+      - key: MAX_POSITION_RISK_PERCENT
+        value: "2"
+      - key: INITIAL_WAR_CHEST
+        value: "1000"
+      - key: LOG_JSON_LEVEL_KEY
+        value: "severity"
+    autoDeploy: true
+    regions:
+      - oregon

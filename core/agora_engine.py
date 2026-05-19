@@ -151,7 +151,22 @@ def print_banner():
 
 def run_cycle(engine: MetaStrategy, simulate: bool):
     """Execute one full Meta trading cycle"""
+    from core.war_chest import get_kill_switch_status, calculate_position_size, get_summary as get_war_summary
+    from reporting.telegram_bot import kill_switch_alert
+    
     print(f"\n[Agora] {'[SIMULATE]' if simulate else '[LIVE]'} Running Meta cycle...")
+
+    # === CHECK KILL SWITCH ===
+    kill_status = get_kill_switch_status()
+    if kill_status["triggered"]:
+        print(f"[Agora] ⛔ KILL SWITCH TRIGGERED: {kill_status['reason']}")
+        kill_switch_alert(kill_status["reason"])
+        return None
+    
+    # Get current position sizing
+    war_summary = get_war_summary()
+    max_position = calculate_position_size(war_summary["total_pnl"])
+    print(f"[Agora] Max position size: ${max_position:.2f}")
 
     result = engine.run_cycle()
     strategy = result["strategy_selected"]
@@ -171,18 +186,32 @@ def run_cycle(engine: MetaStrategy, simulate: bool):
     confidence = top["confidence"]
     asset_type = top["type"]
 
-    # Simulate P&L (in live mode, replace with real execution)
-    import random
-    if simulate:
-        # Simulate: confidence-weighted random outcome
+    # Check confidence threshold (don't fire on low confidence)
+    if confidence < 0.5:
+        print(f"[Agora] Signal confidence {confidence} too low, skipping")
+        return None
+
+    # === LIVE EXECUTION ===
+    if not simulate:
+        executor = TradingExecutor()
+        if asset_type == "stock":
+            exec_result = executor.execute_stock_order(asset, action, 1)
+        else:
+            exec_result = executor.execute_crypto_order(asset, action, 1)
+        
+        if exec_result.get("simulated", True):
+            pnl = 0.0
+            print(f"[Agora] Warning: Live mode but order simulated")
+        else:
+            print(f"[Agora] LIVE order placed: {exec_result.get('order_id')}")
+            pnl = 0.0  # Would need to track filled price
+    else:
+        # === SIMULATE ===
+        import random
         if random.random() < confidence:
             pnl = round(random.uniform(0.5, 5.0) * confidence, 4)
         else:
             pnl = round(-random.uniform(0.5, 3.0), 4)
-    else:
-        # TODO: Wire real execution here
-        pnl = 0.0
-        print("[Agora] LIVE execution not yet wired — set SIMULATE_MODE=false when ready")
 
     # Log to War Chest
     total_pnl = log_trade(asset, asset_type, action, 1.0, pnl, strategy)
@@ -244,6 +273,9 @@ def main():
         return
     
     # Normal trading loop
+    from core.war_chest import get_kill_switch_status
+    from reporting.telegram_bot import check_commands, crash_alert, kill_command_received
+    
     simulate = args.mode == "simulate"
 
     print_banner()
@@ -254,9 +286,26 @@ def main():
 
     engine = MetaStrategy()
     cycle_count = 0
+    remote_kill = False
 
     while True:
         try:
+            # === CHECK REMOTE KILL SWITCH ===
+            cmd = check_commands()
+            if cmd and cmd.get("command") == "kill":
+                remote_kill = True
+                kill_command_received()
+                print("[Agora] ⛔ Remote kill received, halting...")
+                break
+            elif cmd and cmd.get("command") == "start":
+                remote_kill = False
+                print("[Agora] ▶ Remote start received, resuming...")
+            
+            if remote_kill:
+                print("[Agora] ⛔ Remote killed, skipping cycle...")
+                time.sleep(CYCLE_INTERVAL)
+                continue
+            
             run_cycle(engine, simulate)
             cycle_count += 1
 
@@ -288,7 +337,7 @@ def main():
             break
         except Exception as e:
             print(f"[Agora] Error: {e}")
-            send(f"⚠️ *OpenAgora Error*\n`{str(e)}`")
+            crash_alert(str(e))
             time.sleep(30)
 
 
