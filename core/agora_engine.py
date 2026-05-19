@@ -67,7 +67,30 @@ def run_cycle(engine: MetaStrategy, simulate: bool):
         return
 
     signals = result.get("signals", [])
-    print(f"[Agora] {len(signals)} signals generated")
+
+    # ─── OpenStock Layer — merge stock signals ─────────────────
+    try:
+        from core.openstock_layer import generate_stock_signals, get_watchlist_snapshot, check_alerts, get_watchlist_prices
+        from reporting.telegram_bot import send as tg_send
+        stock_snapshot = get_watchlist_snapshot()
+        stock_signals = generate_stock_signals(stock_snapshot)
+        # Check price alerts and fire Telegram notifications
+        prices = {sym: d["price"] for sym, d in stock_snapshot.items() if d.get("price", 0) > 0}
+        triggered_alerts = check_alerts(prices)
+        for alert in triggered_alerts:
+            tg_send(
+                f"🚨 *Price Alert Triggered*\n"
+                f"`{alert['symbol']}` crossed `${alert['targetPrice']:.2f}` "
+                f"({alert['condition']})\nCurrent: `${alert['currentPrice']:.2f}`"
+            )
+        if stock_signals:
+            signals.extend(stock_signals)
+            print(f"[OpenStock] +{len(stock_signals)} stock signals merged")
+    except Exception as e:
+        print(f"[OpenStock] Layer error (non-fatal): {e}")
+    # ──────────────────────────────────────────────────────────
+
+    print(f"[Agora] {len(signals)} signals generated (crypto + stock)")
 
     trades_executed = 0
     for signal in signals[:3]:  # Max 3 trades per cycle
