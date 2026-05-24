@@ -8,6 +8,7 @@ Enhanced with:
 - Yahoo Finance (free stock data, no key needed)
 - Crash recovery loop
 - Heartbeat every hour
+- Nexus Relay reporting (ZapiaPrime status checks)
 
 Usage:
   python core/agora_engine.py --mode simulate
@@ -34,6 +35,7 @@ from reporting.telegram_bot import (
     startup_message, trade_alert, heartbeat,
     send, crash_alert, kill_switch_alert, check_commands
 )
+from reporting.agora_relay import start_relay, update_state
 
 SIMULATE = os.getenv("SIMULATE_MODE", "true").lower() == "true"
 CYCLE_INTERVAL = int(os.getenv("CYCLE_INTERVAL", "300"))  # 5 minutes
@@ -92,6 +94,13 @@ def run_cycle(engine: MetaStrategy, simulate: bool):
 
     print(f"[Agora] {len(signals)} signals generated (crypto + stock)")
 
+    # Update relay with current strategy info
+    active_strats = list(set([s.get("source", "meta") for s in signals if s.get("action") != "HOLD"]))
+    update_state(
+        active_strategies=active_strats,
+        regime=result.get("training_state", "UNKNOWN")
+    )
+
     trades_executed = 0
     for signal in signals[:3]:  # Max 3 trades per cycle
         # Risk check EVERY trade — no exceptions
@@ -148,6 +157,10 @@ def main():
 
     startup_message(simulate)
 
+    # Start Nexus Relay reporter — ZapiaPrime can check status anytime
+    start_relay()
+    update_state(mode="simulate" if simulate else "live")
+
     while True:
         try:
             # Check Telegram commands every cycle
@@ -155,10 +168,12 @@ def main():
             if cmd:
                 if cmd.get("command") == "kill":
                     remote_kill = True
+                    update_state(remote_kill=True)
                     send("⛔ *KILL COMMAND RECEIVED*\nTrading HALTED. Send /start to resume.")
                     print("[Agora] ⛔ Remote kill received")
                 elif cmd.get("command") == "start":
                     remote_kill = False
+                    update_state(remote_kill=False)
                     send("▶️ *START COMMAND RECEIVED*\nTrading resumed.")
                     print("[Agora] ▶ Remote start received")
                 elif cmd.get("command") == "status":
@@ -179,6 +194,7 @@ def main():
 
             run_cycle(engine, simulate)
             cycle_count += 1
+            update_state(cycle_count=cycle_count)
 
             # Heartbeat every 12 cycles (~1 hour)
             if cycle_count % 12 == 0:
