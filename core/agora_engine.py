@@ -127,7 +127,7 @@ def run_cycle(engine: MetaStrategy, simulate: bool):
             # Live execution placeholder — wire Alpaca/Binance here
             pnl = 0.0
 
-        strategy = result.get("strategy", "meta")
+        strategy = result.get("strategy_selected", "meta")
         log_trade(asset, action, pnl, confidence, strategy)
         record_trade(strategy, asset, pnl)
 
