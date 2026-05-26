@@ -1,19 +1,10 @@
 """
-OpenAgora — The Meta Trading Engine
-Stocks + Crypto + Prediction Markets | Self-Evolving | Risk-Protected
-
-Enhanced with:
-- Full risk management (stop loss, drawdown kill switch, position sizing)
-- Remote Telegram kill switch (/kill /start /status)
-- Yahoo Finance (free stock data, no key needed)
-- Crash recovery loop
-- Heartbeat every hour
-- Nexus Relay reporting (ZapiaPrime status checks)
+OpenAgora — The Meta Trading Engine v2.0
+Stocks + Crypto + Prediction Markets | Self-Evolving | MidasPrime Powered
 
 Usage:
   python core/agora_engine.py --mode simulate
   python core/agora_engine.py --mode live
-  python core/agora_engine.py --once
 """
 
 import os
@@ -27,18 +18,23 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.market_feed import MarketFeed
-from core.war_chest import log_trade, get_summary, get_kill_switch_status
-from core.risk_manager import pre_trade_check
+from core.war_chest import log_trade, get_summary
 from strategies.meta_strategy import MetaStrategy
-from memory.everos_bridge import record_trade, get_strategy_weights, get_top_assets
-from reporting.telegram_bot import (
-    startup_message, trade_alert, heartbeat,
-    send, crash_alert, kill_switch_alert, check_commands
+from memory.everos_bridge import (
+    record_trade,
+    get_strategy_weights,
+    get_top_assets,
+    get_memory_summary,
+    is_blacklisted,
+    record_signal_pattern,
+    reflect,
+    add_lesson
 )
-from reporting.agora_relay import start_relay, update_state
+from reporting.telegram_bot import startup_message, trade_alert, heartbeat, send
 
 SIMULATE = os.getenv("SIMULATE_MODE", "true").lower() == "true"
-CYCLE_INTERVAL = int(os.getenv("CYCLE_INTERVAL", "300"))  # 5 minutes
+CYCLE_INTERVAL = int(os.getenv("CYCLE_INTERVAL", "300"))  # 5 min default
+REFLECT_EVERY = 10   # write a reflection lesson every N cycles
 
 
 def print_banner():
@@ -51,159 +47,165 @@ def print_banner():
 """)
 
 
-def run_cycle(engine: MetaStrategy, simulate: bool):
-    """Execute one full Meta trading cycle with full risk checks"""
-    print(f"\n[Agora] {'[SIMULATE]' if simulate else '[LIVE]'} Running Meta cycle...")
+def run_relay_thread():
+    """Push status to Nexus Relay every 60s (background)"""
+    import threading
+    import requests
 
-    # Kill switch check FIRST — before any market calls
-    kill = get_kill_switch_status()
-    if kill["triggered"]:
-        kill_switch_alert(kill["reason"])
-        print(f"[Agora] ⛔ Kill switch active: {kill['reason']} — skipping cycle")
-        return
+    RELAY_URL = os.getenv("NEXUS_RELAY_URL", "")
+    RELAY_SECRET = os.getenv("RELAY_SECRET", "pantheon_prime")
+
+    if not RELAY_URL:
+        return  # Relay not configured — skip silently
+
+    def _push():
+        trade_count = 0
+        total_pnl = 0.0
+        while True:
+            try:
+                summary = get_summary()
+                trade_count = summary.get("total_trades", 0)
+                total_pnl = summary.get("total_pnl", 0.0)
+                requests.post(
+                    f"{RELAY_URL}/command",
+                    json={"type": "status", "trades": trade_count, "pnl": total_pnl},
+                    headers={"X-Secret": RELAY_SECRET},
+                    timeout=5
+                )
+                print(f"[AGORA-RELAY] Pushed | Trades: {trade_count} | PnL: +{total_pnl:.4f}")
+            except Exception:
+                pass
+            time.sleep(60)
+
+    t = threading.Thread(target=_push, daemon=True)
+    t.start()
+
+
+def run_cycle(engine: MetaStrategy, simulate: bool, cycle_num: int):
+    """Execute one full Meta trading cycle with EverOS v2 memory hooks"""
+    mode_tag = "[SIMULATE]" if simulate else "[LIVE]"
+    print(f"\n[Agora] {mode_tag} Running Meta cycle #{cycle_num}...")
 
     result = engine.run_cycle()
-
-    if "error" in result:
-        print(f"[Agora] Cycle error: {result['error']}")
-        return
-
-    signals = result.get("signals", [])
-
-    # ─── OpenStock Layer — merge stock signals ─────────────────
-    try:
-        from core.openstock_layer import generate_stock_signals, get_watchlist_snapshot, check_alerts, get_watchlist_prices
-        from reporting.telegram_bot import send as tg_send
-        stock_snapshot = get_watchlist_snapshot()
-        stock_signals = generate_stock_signals(stock_snapshot)
-        # Check price alerts and fire Telegram notifications
-        prices = {sym: d["price"] for sym, d in stock_snapshot.items() if d.get("price", 0) > 0}
-        triggered_alerts = check_alerts(prices)
-        for alert in triggered_alerts:
-            tg_send(
-                f"🚨 *Price Alert Triggered*\n"
-                f"`{alert['symbol']}` crossed `${alert['targetPrice']:.2f}` "
-                f"({alert['condition']})\nCurrent: `${alert['currentPrice']:.2f}`"
-            )
-        if stock_signals:
-            signals.extend(stock_signals)
-            print(f"[OpenStock] +{len(stock_signals)} stock signals merged")
-    except Exception as e:
-        print(f"[OpenStock] Layer error (non-fatal): {e}")
-    # ──────────────────────────────────────────────────────────
+    strategy = result["strategy_selected"]
+    signals = result["signals"]
 
     print(f"[Agora] {len(signals)} signals generated (crypto + stock)")
 
-    # Update relay with current strategy info
-    active_strats = list(set([s.get("source", "meta") for s in signals if s.get("action") != "HOLD"]))
-    update_state(
-        active_strategies=active_strats,
-        regime=result.get("training_state", "UNKNOWN")
-    )
+    if not signals:
+        print("[Agora] No signals this cycle.")
+        return None
 
-    trades_executed = 0
-    for signal in signals[:3]:  # Max 3 trades per cycle
-        # Risk check EVERY trade — no exceptions
-        risk = pre_trade_check(signal)
+    # ── Filter blacklisted assets ──
+    clean_signals = [s for s in signals if not is_blacklisted(s["asset"])]
+    blocked_bl = len(signals) - len(clean_signals)
+    if blocked_bl:
+        print(f"[Agora] 🚫 {blocked_bl} signal(s) blocked — blacklisted assets")
 
-        if not risk["approved"]:
-            print(f"[Agora] ❌ Trade blocked: {risk['reason']}")
-            continue
+    # ── Confidence gate ──
+    MIN_CONFIDENCE = float(os.getenv("MIN_CONFIDENCE", "0.5"))
+    eligible = [s for s in clean_signals if s["confidence"] >= MIN_CONFIDENCE]
+    blocked_conf = len(clean_signals) - len(eligible)
+    for s in clean_signals:
+        if s["confidence"] < MIN_CONFIDENCE:
+            print(f"[Agora] ❌ Trade blocked: Low confidence: {s['confidence']} < {MIN_CONFIDENCE}")
 
-        asset = signal.get("asset", "UNKNOWN")
-        action = signal.get("action", "HOLD")
-        confidence = signal.get("confidence", 0)
-        position_size = risk["position_size"]
+    if not eligible:
+        print("[Agora] Cycle complete — 0 trades executed")
+        return None
 
-        if action == "HOLD":
-            continue
+    # ── Execute top signal ──
+    top = eligible[0]
+    asset = top["asset"]
+    action = top["action"]
+    confidence = top["confidence"]
+    asset_type = top["type"]
 
-        print(f"[Agora] ✅ Trade approved — {action} {asset} | size=${position_size} | conf={confidence:.2f}")
-
-        if simulate:
-            import random
-            pnl = random.uniform(-position_size * 0.05, position_size * 0.08)
+    import random
+    if simulate:
+        if random.random() < confidence:
+            pnl = round(random.uniform(0.5, 5.0) * confidence, 4)
         else:
-            # Live execution placeholder — wire Alpaca/Binance here
-            pnl = 0.0
+            pnl = round(-random.uniform(0.5, 3.0), 4)
+    else:
+        pnl = 0.0
+        print("[Agora] LIVE execution not yet wired — set SIMULATE_MODE=false when ready")
 
-        strategy = result.get("strategy_selected", "meta")
-        log_trade(asset, signal.get("asset_type", "unknown"), action, position_size, pnl, strategy)
-        record_trade(strategy, asset, pnl)
+    # ── Log to War Chest ──
+    total_pnl = log_trade(asset, asset_type, action, 1.0, pnl, strategy)
 
-        if abs(pnl) > 0.01:
-            trade_alert(asset, action, pnl, confidence, simulate)
+    # ── EverOS v2: record trade with confidence + signal pattern ──
+    record_trade(strategy, asset, pnl, confidence)
 
-        trades_executed += 1
+    conditions = {
+        "asset_type": asset_type,
+        "action": action,
+        "confidence_bucket": "high" if confidence >= 0.7 else "mid",
+        "strategy": strategy
+    }
+    record_signal_pattern(conditions, strategy, pnl)
 
-    print(f"[Agora] Cycle complete — {trades_executed} trades executed")
+    # ── Telegram alert ──
+    trade_alert(asset, action, pnl, total_pnl, strategy, simulate)
+
+    outcome = "WIN ✅" if pnl > 0 else "LOSS ❌"
+    print(f"[Agora] {outcome} | {action} {asset} | conf={confidence} | P&L: ${pnl:+.4f} | War Chest: ${total_pnl:+.4f}")
+
+    return pnl
 
 
 def main():
-    print_banner()
-
-    parser = argparse.ArgumentParser(description="OpenAgora Meta Trading Engine")
+    parser = argparse.ArgumentParser(description="OpenAgora Meta Trading Engine v2.0")
     parser.add_argument("--mode", choices=["simulate", "live"], default="simulate")
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
     args = parser.parse_args()
 
-    simulate = args.mode == "simulate" or SIMULATE
-    if not simulate:
-        print("[Agora] ⚠️  LIVE MODE — real capital at risk")
+    simulate = args.mode == "simulate"
+
+    print_banner()
+    print(f"[Agora] Mode: {'SIMULATE 🔵' if simulate else 'LIVE 🔴'}")
+    print(f"[Agora] Cycle interval: {CYCLE_INTERVAL}s")
+    print(f"[Agora] Reflect every: {REFLECT_EVERY} cycles")
+
+    run_relay_thread()
+    startup_message(simulate)
 
     engine = MetaStrategy()
     cycle_count = 0
-    remote_kill = False
-
-    startup_message(simulate)
-
-    # Start Nexus Relay reporter — ZapiaPrime can check status anytime
-    start_relay()
-    update_state(mode="simulate" if simulate else "live")
 
     while True:
         try:
-            # Check Telegram commands every cycle
-            cmd = check_commands()
-            if cmd:
-                if cmd.get("command") == "kill":
-                    remote_kill = True
-                    update_state(remote_kill=True)
-                    send("⛔ *KILL COMMAND RECEIVED*\nTrading HALTED. Send /start to resume.")
-                    print("[Agora] ⛔ Remote kill received")
-                elif cmd.get("command") == "start":
-                    remote_kill = False
-                    update_state(remote_kill=False)
-                    send("▶️ *START COMMAND RECEIVED*\nTrading resumed.")
-                    print("[Agora] ▶ Remote start received")
-                elif cmd.get("command") == "status":
-                    summary = get_summary()
-                    send(
-                        f"📊 *OpenAgora Status*\n"
-                        f"Mode: `{'SIMULATE' if simulate else 'LIVE'}`\n"
-                        f"Cycles: `{cycle_count}`\n"
-                        f"War Chest P&L: `${summary['total_pnl']:+.4f}`\n"
-                        f"Trades: `{summary['total_trades']}` | Win Rate: `{summary['win_rate']}%`\n"
-                        f"Kill Switch: `{'ACTIVE' if remote_kill else 'OFF'}`"
-                    )
-
-            if remote_kill:
-                print("[Agora] ⛔ Remote killed — skipping cycle...")
-                time.sleep(CYCLE_INTERVAL)
-                continue
-
-            run_cycle(engine, simulate)
             cycle_count += 1
-            update_state(cycle_count=cycle_count)
+            run_cycle(engine, simulate, cycle_count)
 
-            # Heartbeat every 12 cycles (~1 hour)
+            # ── EverOS Reflection every N cycles ──
+            if cycle_count % REFLECT_EVERY == 0:
+                reflect(cycle_count)
+
+            # ── Heartbeat every 12 cycles (~1 hour) ──
             if cycle_count % 12 == 0:
                 summary = get_summary()
                 heartbeat(summary, simulate)
-                weights = get_strategy_weights()
-                top_assets = get_top_assets(3)
+                mem_summary = get_memory_summary()
+                weights = mem_summary["strategy_weights"]
+                top_assets = mem_summary["top_assets"]
+                blacklist = mem_summary["blacklist"]
                 print(f"[Agora] Strategy weights: {weights}")
                 print(f"[Agora] Top assets: {top_assets}")
+                if blacklist:
+                    print(f"[Agora] Blacklisted: {blacklist}")
+                print(f"[EverOS] Lessons logged: {mem_summary['lesson_count']}")
+                print(f"[EverOS] Last lesson: {mem_summary['last_lesson']}")
+
+                # Push memory summary to Telegram
+                bl_str = ", ".join(blacklist) if blacklist else "None"
+                send(
+                    f"*🧠 EverOS Memory Report — Cycle {cycle_count}*\n"
+                    f"Strategy weights: `{weights}`\n"
+                    f"Blacklist: `{bl_str}`\n"
+                    f"Lessons: `{mem_summary['lesson_count']}`\n"
+                    f"Last insight: _{mem_summary['last_lesson']}_"
+                )
 
             if args.once:
                 print("[Agora] --once flag set. Exiting.")
@@ -215,17 +217,19 @@ def main():
         except KeyboardInterrupt:
             print("\n[Agora] Shutdown signal received.")
             summary = get_summary()
+            mem_summary = get_memory_summary()
+            add_lesson(f"[SHUTDOWN @ cycle {cycle_count}] War Chest: ${summary['total_pnl']:+.4f} | Trades: {summary['total_trades']}")
             send(
                 f"*🏛️ OpenAgora OFFLINE*\n"
                 f"Final War Chest: `${summary['total_pnl']:+.4f}`\n"
                 f"Total Trades: `{summary['total_trades']}`\n"
-                f"_The Agora never closes._ 🔱"
+                f"Lessons banked: `{mem_summary['lesson_count']}`\n"
+                f"_The Agora will return._ 🔱"
             )
             break
         except Exception as e:
             print(f"[Agora] Error: {e}")
-            crash_alert(str(e))
-            print("[Agora] Recovering in 30s...")
+            send(f"⚠️ *OpenAgora Error*\n`{str(e)}`")
             time.sleep(30)
 
 
