@@ -128,7 +128,7 @@ def run_cycle(engine: MetaStrategy, simulate: bool):
             pnl = 0.0
 
         strategy = result.get("strategy_selected", "meta")
-        log_trade(asset, action, pnl, confidence, strategy)
+        log_trade(asset, signal.get("asset_type", "unknown"), action, position_size, pnl, strategy)
         record_trade(strategy, asset, pnl)
 
         if abs(pnl) > 0.01:
