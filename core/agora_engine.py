@@ -34,7 +34,93 @@ from reporting.telegram_bot import startup_message, trade_alert, heartbeat, send
 
 SIMULATE = os.getenv("SIMULATE_MODE", "true").lower() == "true"
 CYCLE_INTERVAL = int(os.getenv("CYCLE_INTERVAL", "300"))  # 5 min default
-REFLECT_EVERY = 10   # write a reflection lesson every N cycles
+REFLECT_EVERY = 10
+
+
+# ─── CCXT LIVE EXECUTOR ───────────────────────────────────────────────────────
+def ccxt_execute(asset: str, action: str, asset_type: str) -> float:
+    """
+    Execute a real trade via CCXT.
+    Returns PnL estimate (entry price - fill price delta).
+    Supports crypto pairs. Prediction markets routed separately.
+    """
+    import ccxt
+
+    # Map asset name to CCXT symbol
+    COIN_MAP = {
+        "bitcoin": "BTC/USDT",
+        "ethereum": "ETH/USDT",
+        "solana": "SOL/USDT",
+        "polygon": "MATIC/USDT",
+        "chainlink": "LINK/USDT",
+        "cardano": "ADA/USDT",
+        "avalanche-2": "AVAX/USDT",
+        "dot": "DOT/USDT",
+    }
+
+    EXCHANGE_ID = os.getenv("CCXT_EXCHANGE", "binance")
+    API_KEY     = os.getenv(f"{EXCHANGE_ID.upper()}_API_KEY", "")
+    API_SECRET  = os.getenv(f"{EXCHANGE_ID.upper()}_API_SECRET", "")
+    TRADE_SIZE  = float(os.getenv("TRADE_SIZE_USD", "10"))  # default $10 per trade
+
+    if not API_KEY or not API_SECRET:
+        print(f"[CCXT] No keys for {EXCHANGE_ID} — add {EXCHANGE_ID.upper()}_API_KEY to .env")
+        return 0.0
+
+    try:
+        exchange_class = getattr(ccxt, EXCHANGE_ID)
+        exchange = exchange_class({
+            "apiKey": API_KEY,
+            "secret": API_SECRET,
+            "enableRateLimit": True,
+        })
+
+        symbol = COIN_MAP.get(asset.lower())
+        if not symbol:
+            # Try direct (e.g. signal already formatted as BTC/USDT)
+            symbol = asset if "/" in asset else f"{asset.upper()}/USDT"
+
+        # Get current price
+        ticker = exchange.fetch_ticker(symbol)
+        price  = ticker["last"]
+        amount = TRADE_SIZE / price  # units to buy/sell
+
+        side = "buy" if action == "BUY" else "sell"
+
+        print(f"[CCXT] LIVE {side.upper()} {symbol} @ ${price:.4f} | size=${TRADE_SIZE} | units={amount:.6f}")
+
+        order = exchange.create_market_order(symbol, side, amount)
+
+        fill_price = order.get("average") or order.get("price") or price
+        fee        = order.get("fee", {}).get("cost", 0) or 0
+        pnl        = (fill_price - price) * amount if side == "buy" else (price - fill_price) * amount
+        pnl        = round(pnl - fee, 6)
+
+        print(f"[CCXT] Order filled | fill={fill_price} | fee={fee} | pnl={pnl:+.6f}")
+        send(
+            f"🔴 *LIVE TRADE EXECUTED*\n"
+            f"Exchange: `{EXCHANGE_ID}`\n"
+            f"Pair: `{symbol}`\n"
+            f"Side: `{side.upper()}`\n"
+            f"Price: `${fill_price:.4f}`\n"
+            f"Size: `${TRADE_SIZE}`\n"
+            f"Fee: `${fee:.4f}`\n"
+            f"PnL: `${pnl:+.6f}`"
+        )
+        return pnl
+
+    except ccxt.InsufficientFunds as e:
+        print(f"[CCXT] Insufficient funds: {e}")
+        send(f"⚠️ *Insufficient Funds*\n`{e}`")
+        return 0.0
+    except ccxt.NetworkError as e:
+        print(f"[CCXT] Network error: {e}")
+        return 0.0
+    except Exception as e:
+        print(f"[CCXT] Execution error: {e}")
+        send(f"⚠️ *CCXT Error*\n`{str(e)[:200]}`")
+        return 0.0
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def print_banner():
@@ -52,100 +138,76 @@ def run_relay_thread():
     import threading
     import requests
 
-    RELAY_URL = os.getenv("NEXUS_RELAY_URL", "")
+    RELAY_URL    = os.getenv("NEXUS_RELAY_URL", "")
     RELAY_SECRET = os.getenv("RELAY_SECRET", "pantheon_prime")
 
     if not RELAY_URL:
-        return  # Relay not configured — skip silently
+        return
 
     def _push():
-        trade_count = 0
-        total_pnl = 0.0
         while True:
             try:
                 summary = get_summary()
-                trade_count = summary.get("total_trades", 0)
-                total_pnl = summary.get("total_pnl", 0.0)
                 requests.post(
                     f"{RELAY_URL}/command",
-                    json={"type": "status", "trades": trade_count, "pnl": total_pnl},
+                    json={"type": "status", "trades": summary.get("total_trades", 0), "pnl": summary.get("total_pnl", 0.0)},
                     headers={"X-Secret": RELAY_SECRET},
                     timeout=5
                 )
-                print(f"[AGORA-RELAY] Pushed | Trades: {trade_count} | PnL: +{total_pnl:.4f}")
             except Exception:
                 pass
             time.sleep(60)
 
-    t = threading.Thread(target=_push, daemon=True)
-    t.start()
+    threading.Thread(target=_push, daemon=True).start()
 
 
 def run_cycle(engine: MetaStrategy, simulate: bool, cycle_num: int):
-    """Execute one full Meta trading cycle with EverOS v2 memory hooks"""
+    """Execute one full Meta trading cycle"""
     mode_tag = "[SIMULATE]" if simulate else "[LIVE]"
     print(f"\n[Agora] {mode_tag} Running Meta cycle #{cycle_num}...")
 
-    result = engine.run_cycle()
+    result   = engine.run_cycle()
     strategy = result["strategy_selected"]
-    signals = result["signals"]
+    signals  = result["signals"]
 
-    print(f"[Agora] {len(signals)} signals generated (crypto + stock)")
+    print(f"[Agora] {len(signals)} signals generated")
 
     if not signals:
         print("[Agora] No signals this cycle.")
         return None
 
-    # ── Filter blacklisted assets ──
+    # Filter blacklisted
     clean_signals = [s for s in signals if not is_blacklisted(s["asset"])]
-    blocked_bl = len(signals) - len(clean_signals)
-    if blocked_bl:
-        print(f"[Agora] 🚫 {blocked_bl} signal(s) blocked — blacklisted assets")
+    if len(signals) != len(clean_signals):
+        print(f"[Agora] 🚫 {len(signals)-len(clean_signals)} blacklisted signal(s) dropped")
 
-    # ── Confidence gate ──
+    # Confidence gate
     MIN_CONFIDENCE = float(os.getenv("MIN_CONFIDENCE", "0.5"))
     eligible = [s for s in clean_signals if s["confidence"] >= MIN_CONFIDENCE]
-    blocked_conf = len(clean_signals) - len(eligible)
-    for s in clean_signals:
-        if s["confidence"] < MIN_CONFIDENCE:
-            print(f"[Agora] ❌ Trade blocked: Low confidence: {s['confidence']} < {MIN_CONFIDENCE}")
 
     if not eligible:
-        print("[Agora] Cycle complete — 0 trades executed")
+        print("[Agora] Cycle complete — 0 trades executed (confidence gate)")
         return None
 
-    # ── Execute top signal ──
-    top = eligible[0]
-    asset = top["asset"]
-    action = top["action"]
+    top        = eligible[0]
+    asset      = top["asset"]
+    action     = top["action"]
     confidence = top["confidence"]
     asset_type = top["type"]
 
-    import random
+    # ── Execute ──
     if simulate:
-        if random.random() < confidence:
-            pnl = round(random.uniform(0.5, 5.0) * confidence, 4)
-        else:
-            pnl = round(-random.uniform(0.5, 3.0), 4)
+        import random
+        pnl = round(random.uniform(0.5, 5.0) * confidence, 4) if random.random() < confidence else round(-random.uniform(0.5, 3.0), 4)
     else:
-        pnl = 0.0
-        print("[Agora] LIVE execution not yet wired — set SIMULATE_MODE=false when ready")
+        # LIVE — CCXT execution
+        pnl = ccxt_execute(asset, action, asset_type)
 
-    # ── Log to War Chest ──
+    # Log + memory
     total_pnl = log_trade(asset, asset_type, action, 1.0, pnl, strategy)
-
-    # ── EverOS v2: record trade with confidence + signal pattern ──
     record_trade(strategy, asset, pnl, confidence)
+    record_signal_pattern({"asset_type": asset_type, "action": action, "confidence_bucket": "high" if confidence >= 0.7 else "mid", "strategy": strategy}, strategy, pnl)
 
-    conditions = {
-        "asset_type": asset_type,
-        "action": action,
-        "confidence_bucket": "high" if confidence >= 0.7 else "mid",
-        "strategy": strategy
-    }
-    record_signal_pattern(conditions, strategy, pnl)
-
-    # ── Telegram alert ──
     trade_alert(asset, action, pnl, total_pnl, strategy, simulate)
 
     outcome = "WIN ✅" if pnl > 0 else "LOSS ❌"
@@ -157,7 +219,7 @@ def run_cycle(engine: MetaStrategy, simulate: bool, cycle_num: int):
 def main():
     parser = argparse.ArgumentParser(description="OpenAgora Meta Trading Engine v2.0")
     parser.add_argument("--mode", choices=["simulate", "live"], default="simulate")
-    parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
+    parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
 
     simulate = args.mode == "simulate"
@@ -165,12 +227,11 @@ def main():
     print_banner()
     print(f"[Agora] Mode: {'SIMULATE 🔵' if simulate else 'LIVE 🔴'}")
     print(f"[Agora] Cycle interval: {CYCLE_INTERVAL}s")
-    print(f"[Agora] Reflect every: {REFLECT_EVERY} cycles")
 
     run_relay_thread()
     startup_message(simulate)
 
-    engine = MetaStrategy()
+    engine      = MetaStrategy()
     cycle_count = 0
 
     while True:
@@ -178,27 +239,16 @@ def main():
             cycle_count += 1
             run_cycle(engine, simulate, cycle_count)
 
-            # ── EverOS Reflection every N cycles ──
             if cycle_count % REFLECT_EVERY == 0:
                 reflect(cycle_count)
 
-            # ── Heartbeat every 12 cycles (~1 hour) ──
             if cycle_count % 12 == 0:
-                summary = get_summary()
-                heartbeat(summary, simulate)
+                summary     = get_summary()
                 mem_summary = get_memory_summary()
-                weights = mem_summary["strategy_weights"]
-                top_assets = mem_summary["top_assets"]
-                blacklist = mem_summary["blacklist"]
-                print(f"[Agora] Strategy weights: {weights}")
-                print(f"[Agora] Top assets: {top_assets}")
-                if blacklist:
-                    print(f"[Agora] Blacklisted: {blacklist}")
-                print(f"[EverOS] Lessons logged: {mem_summary['lesson_count']}")
-                print(f"[EverOS] Last lesson: {mem_summary['last_lesson']}")
-
-                # Push memory summary to Telegram
-                bl_str = ", ".join(blacklist) if blacklist else "None"
+                heartbeat(summary, simulate)
+                weights    = mem_summary["strategy_weights"]
+                blacklist  = mem_summary["blacklist"]
+                bl_str     = ", ".join(blacklist) if blacklist else "None"
                 send(
                     f"*🧠 EverOS Memory Report — Cycle {cycle_count}*\n"
                     f"Strategy weights: `{weights}`\n"
@@ -208,15 +258,14 @@ def main():
                 )
 
             if args.once:
-                print("[Agora] --once flag set. Exiting.")
+                print("[Agora] --once flag. Exiting.")
                 break
 
             print(f"[Agora] Sleeping {CYCLE_INTERVAL}s...")
             time.sleep(CYCLE_INTERVAL)
 
         except KeyboardInterrupt:
-            print("\n[Agora] Shutdown signal received.")
-            summary = get_summary()
+            summary     = get_summary()
             mem_summary = get_memory_summary()
             add_lesson(f"[SHUTDOWN @ cycle {cycle_count}] War Chest: ${summary['total_pnl']:+.4f} | Trades: {summary['total_trades']}")
             send(
