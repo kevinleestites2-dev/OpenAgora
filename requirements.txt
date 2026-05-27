@@ -6,3 +6,4 @@ pandas==2.1.4
 numpy==1.26.3
 python-telegram-bot==20.7
 yfinance==0.2.38
+ccxt==4.3.89
