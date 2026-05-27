@@ -26,10 +26,7 @@ DECAY_FACTOR = 0.92     # older trades count 8% less per batch of 10 trades
 # ─────────────────────────────────────────
 
 def _load():
-    if os.path.exists(MEMORY_PATH):
-        with open(MEMORY_PATH, "r") as f:
-            return json.load(f)
-    return {
+    DEFAULTS = {
         "version": "2.0",
         "created": _now(),
         "strategy_stats": {},
@@ -40,6 +37,15 @@ def _load():
         "lessons": [],
         "cycle_count": 0
     }
+    if os.path.exists(MEMORY_PATH):
+        with open(MEMORY_PATH, "r") as f:
+            data = json.load(f)
+        # backfill any missing top-level keys (handles old memory files)
+        for k, v in DEFAULTS.items():
+            if k not in data:
+                data[k] = v
+        return data
+    return DEFAULTS
 
 
 def _save(data):
