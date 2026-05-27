@@ -33,30 +33,35 @@ BACKTEST_MEMORY_PATH  = Path("memory/backtest_weights.json")
 
 def fetch_historical(symbol: str, days: int = 365) -> list:
     """
-    Pull daily OHLCV from FMP.
+    Pull daily OHLCV from FMP stable endpoint.
     Returns list of candles sorted oldest → newest.
     """
     if not FMP_KEY:
         print("[Backtest] FMP_API_KEY not set.")
         return []
 
-    end   = datetime.utcnow()
+    end   = datetime.now()
     start = end - timedelta(days=days)
 
     try:
-        url = f"{FMP_BASE}/historical-price-full/{symbol}"
+        url = "https://financialmodelingprep.com/stable/historical-price-eod/full"
         r = requests.get(url, params={
-            "from": start.strftime("%Y-%m-%d"),
-            "to":   end.strftime("%Y-%m-%d"),
+            "symbol": symbol,
+            "from":   start.strftime("%Y-%m-%d"),
+            "to":     end.strftime("%Y-%m-%d"),
             "apikey": FMP_KEY
         }, timeout=15)
 
         data = r.json()
-        candles = data.get("historical", [])
+
+        # New endpoint returns a list directly (not wrapped in 'historical')
+        if isinstance(data, dict):
+            print(f"[Backtest] {symbol}: API error — {data}")
+            return []
 
         # Normalize + reverse to oldest-first
         normalized = []
-        for c in reversed(candles):
+        for c in reversed(data):
             normalized.append({
                 "date":   c.get("date"),
                 "open":   float(c.get("open",  0)),
