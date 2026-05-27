@@ -12,6 +12,9 @@ import random
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 FMP_BASE = "https://financialmodelingprep.com/api/v3"
 FMP_KEY = os.getenv("FMP_API_KEY", "")
