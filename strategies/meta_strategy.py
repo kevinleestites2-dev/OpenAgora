@@ -24,8 +24,6 @@ class MetaStrategy:
     def __init__(self):
         self.feed = MarketFeed()
         self.strategies = ["momentum", "arbitrage", "mean_reversion", "trend_follow", "training"]
-        
-        # Initialize training strategy for Q-learning
         self.training = get_training_strategy()
 
     def select_strategy(self):
@@ -33,13 +31,9 @@ class MetaStrategy:
         weights = get_strategy_weights()
         if not weights:
             return random.choice(self.strategies)
-
-        # Filter to known strategies
         available = {k: v for k, v in weights.items() if k in self.strategies}
         if not available:
             return random.choice(self.strategies)
-
-        # Weighted random selection
         total = sum(available.values())
         r = random.uniform(0, total)
         cumulative = 0
@@ -50,14 +44,14 @@ class MetaStrategy:
         return self.strategies[0]
 
     def analyze_crypto(self, prices: dict):
-        """Analyze crypto prices for signals"""
+        """Analyze crypto prices for signals — threshold: 2% move"""
         signals = []
         for coin, data in prices.items():
             change = data.get("usd_24h_change", 0)
             price = data.get("usd", 0)
-            if change and abs(change) > 5:
+            if change and abs(change) > 2:  # lowered from 5% to 2%
                 direction = "BUY" if change > 0 else "SELL"
-                confidence = min(abs(change) / 20, 1.0)
+                confidence = min(abs(change) / 10, 1.0)  # scaled to new threshold
                 signals.append({
                     "asset": coin,
                     "type": "crypto",
@@ -72,7 +66,6 @@ class MetaStrategy:
         """Find arb opportunities in prediction markets"""
         signals = []
         for m in markets:
-            # Look for markets where YES + NO prices don't sum to ~1 (arb gap)
             yes = float(m.get("outcomePrices", [0.5])[0]) if m.get("outcomePrices") else 0.5
             no = 1 - yes
             gap = abs((yes + no) - 1.0)
@@ -91,44 +84,37 @@ class MetaStrategy:
         Full Meta cycle:
         1. Get market snapshot
         2. Select best strategy via EverOS weights
-        3. Generate signals (including trained AI signals)
+        3. Generate signals
         4. Return trade plan
-        5. Record outcomes for training
         """
         strategy = self.select_strategy()
         snapshot = self.feed.snapshot()
 
         crypto_signals = self.analyze_crypto(snapshot.get("crypto", {}))
         pred_signals = self.analyze_prediction_markets(snapshot.get("prediction_markets", []))
-        
-        # Training strategy analysis (Q-learning)
         training_analysis = self.training.analyze_with_ai(snapshot.get("crypto", {}), "crypto")
         training_signals = training_analysis.get("signals", [])
 
         all_signals = crypto_signals + pred_signals + training_signals
         all_signals.sort(key=lambda x: x["confidence"], reverse=True)
 
-        # Meta lesson — note what the market is showing
         if all_signals:
             top = all_signals[0]
             add_lesson(f"Top signal: {top['asset']} ({top['action']}) confidence={top['confidence']} via {strategy}")
-            
-            # Record training outcome
             if strategy == "training":
                 state = training_analysis.get("state", "neutral")
                 action = training_analysis.get("action", "HOLD")
-                # This will be updated with actual P&L after trade executes
                 self._pending_training = {"state": state, "action": action}
 
         return {
             "strategy_selected": strategy,
-            "signals": all_signals[:5],  # Top 5 signals
+            "signals": all_signals[:5],
             "training_state": training_analysis.get("state", "unknown"),
             "training_action": training_analysis.get("action", "none"),
             "training_stats": get_training_stats(),
             "timestamp": snapshot["timestamp"]
         }
-    
+
     def record_trade_result(self, pnl):
         """Record trade result for training learning"""
         if hasattr(self, "_pending_training") and self._pending_training:
@@ -137,6 +123,5 @@ class MetaStrategy:
                 self._pending_training["action"],
                 pnl
             )
-            # Decay epsilon for less exploration over time
             self.training.decay_epsilon()
             self._pending_training = None
