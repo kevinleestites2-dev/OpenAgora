@@ -49,9 +49,9 @@ class MetaStrategy:
         for coin, data in prices.items():
             change = data.get("usd_24h_change", 0)
             price = data.get("usd", 0)
-            if change and abs(change) > 2:  # lowered from 5% to 2%
+            if change and abs(change) > 0.5:  # lowered from 5% to 2%
                 direction = "BUY" if change > 0 else "SELL"
-                confidence = min(abs(change) / 10, 1.0)  # scaled to new threshold
+                confidence = min(abs(change) / 5, 1.0)  # scaled to new threshold
                 signals.append({
                     "asset": coin,
                     "type": "crypto",
