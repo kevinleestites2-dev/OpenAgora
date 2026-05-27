@@ -82,13 +82,13 @@ def record_trade(strategy: str, asset: str, pnl: float, confidence: float = 0.5)
         s["losses"] += 1
 
     # Append to rolling history (cap at 20)
-    s["trade_history"].append({"pnl": pnl, "ts": _now()})
-    if len(s["trade_history"]) > 20:
+    s.setdefault("trade_history", []).append({"pnl": pnl, "ts": _now()})
+    if len(s.setdefault("trade_history", [])) > 20:
         s["trade_history"].pop(0)
 
     # Recompute weighted score using decay
     score = 0.0
-    for i, t in enumerate(reversed(s["trade_history"])):
+    for i, t in enumerate(reversed(s.get("trade_history", []))):
         weight = DECAY_FACTOR ** i
         score += (1.0 if t["pnl"] > 0 else -0.5) * weight
     s["weighted_score"] = round(score, 4)
