@@ -1,0 +1,83 @@
+name: OpenAgora — FMP Backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days of history to backtest'
+        required: false
+        default: '365'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install requests python-dotenv
+
+      - name: Run Backtest
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python core/backtest.py --days ${{ github.event.inputs.days || '365' }}
+
+      - name: Send Telegram Report
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 - <<'EOF'
+          import os, json, requests
+          from pathlib import Path
+
+          token   = os.getenv("TELEGRAM_BOT_TOKEN", "")
+          chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+
+          if not token or not chat_id:
+              print("No Telegram config — skipping")
+              exit(0)
+
+          results_path = Path("logs/backtest_results.json")
+          if not results_path.exists():
+              msg = "⚠️ OpenAgora Backtest — no results file found."
+          else:
+              r = json.loads(results_path.read_text())
+              weights = r.get("everos_weights", {})
+              w_str = "\n".join([f"  {k}: {v:.3f}" for k, v in weights.items()])
+              msg = (
+                  f"🏛️ *OpenAgora Backtest Complete*\n\n"
+                  f"📅 Period: {r.get('period_days')} days\n"
+                  f"📊 Trades: {r.get('total_trades'):,}\n"
+                  f"🎯 Win Rate: {r.get('win_rate')}%\n"
+                  f"💰 Total P&L: {r.get('total_pnl'):+.2f}\n\n"
+                  f"⚡ EverOS Weights Injected:\n{w_str}"
+              )
+
+          requests.post(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              json={"chat_id": chat_id, "text": msg, "parse_mode": "Markdown"},
+              timeout=10
+          )
+          EOF
+
+      - name: Upload Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: logs/backtest_results.json
+          retention-days: 30
