@@ -1,19 +1,20 @@
 """
-OpenAgora — Telegram Reporting
-Pantheon Deploy Rule: every Prime MUST have a reporting channel.
+OpenAgora — Telegram Reporting via SeekerClaw
+Dedicated bot for OpenAgora ONLY.
+Token: @Seekerclaw27_bot
 """
 
 import os
 import requests
 from datetime import datetime
 
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8679655550:AAGUB1m5fmqHc8OHqqM24Vixz8FfwX-gqD4")
+# SeekerClaw — OpenAgora's dedicated Telegram bot
+TELEGRAM_TOKEN   = os.getenv("AGORA_TELEGRAM_TOKEN", "8847391123:AAEvnj4sEtJABzxBE3jqP0IhhybQAwCL6q4")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7135054241")
 
 
 def send(message: str):
-    """Send a message to the Forgemaster via Telegram"""
+    """Send a message to the Forgemaster via SeekerClaw"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     try:
         r = requests.post(url, json={
@@ -23,13 +24,13 @@ def send(message: str):
         }, timeout=10)
         return r.status_code == 200
     except Exception as e:
-        print(f"[Telegram] Error: {e}")
+        print(f"[SeekerClaw] Error: {e}")
         return False
 
 
 def trade_alert(asset, action, pnl, total_pnl, strategy, simulate=True):
     """Send a trade alert"""
-    mode = "🔵 SIMULATE" if simulate else "🟢 LIVE"
+    mode  = "🔵 SIMULATE" if simulate else "🟢 LIVE"
     emoji = "📈" if pnl >= 0 else "📉"
     msg = (
         f"*OpenAgora Trade* {mode}\n"
@@ -59,14 +60,39 @@ def heartbeat(summary: dict, simulate=True):
 
 def startup_message(simulate=True):
     """Announce OpenAgora is live"""
-    mode = "SIMULATE" if simulate else "🔴 LIVE TRADING"
+    mode = "SIMULATE 🔵" if simulate else "🔴 LIVE TRADING"
     send(
         f"*🏛️ OpenAgora ONLINE*\n"
+        f"Bot: `@Seekerclaw27_bot`\n"
         f"Mode: `{mode}`\n"
         f"Markets: Crypto + Stocks + Predictions\n"
         f"Meta Layer: ACTIVE\n"
+        f"EverOS: CALIBRATING\n"
         f"War Chest: SYNCED\n"
         f"_The Agora never closes._ 🔱"
+    )
+
+
+def circuit_breaker_alert(cycle: int):
+    """Alert when circuit breaker fires"""
+    send(
+        f"⚡ *Circuit Breaker Fired*\n"
+        f"Cycle `{cycle}` skipped — 2 consecutive losses\n"
+        f"EverOS recalibrating...\n"
+        f"_Next cycle resumes automatically._"
+    )
+
+
+def diversification_alert(asset: str, action: str, pnl: float, total_pnl: float, simulate=True):
+    """Alert when diversification nudge fires a second trade"""
+    mode  = "🔵 SIMULATE" if simulate else "🟢 LIVE"
+    emoji = "📈" if pnl >= 0 else "📉"
+    send(
+        f"*🔀 Diversification Trade* {mode}\n"
+        f"{emoji} *{asset}* | {action.upper()}\n"
+        f"P&L: `${pnl:+.4f}`\n"
+        f"War Chest Total: `${total_pnl:+.4f}`\n"
+        f"_EverOS confidence was high enough to double down._"
     )
 
 
@@ -85,8 +111,7 @@ def crash_alert(error: str):
     send(
         f"*⚠️ OpenAgora CRASHED*\n"
         f"Error: `{error}`\n"
-        f"Bot offline!\n"
-        f"Restart required."
+        f"Bot offline — restart required."
     )
 
 
@@ -95,27 +120,29 @@ def kill_command_received():
     send(
         f"*⛔ KILL COMMAND RECEIVED*\n"
         f"Trading HALTED by remote\n"
-        f"Use /start to resume"
+        f"Send /start to resume"
     )
 
 
-# Command handler - check incoming messages for commands
 def check_commands():
-    """Check for incoming commands (call periodically)"""
+    """Check for incoming Telegram commands"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
     try:
         r = requests.get(url, timeout=10)
         if r.status_code == 200:
             updates = r.json().get("result", [])
-            # Look for /kill or /start commands
             for update in updates:
                 if "message" in update:
-                    text = update["message"].get("text", "")
+                    text    = update["message"].get("text", "")
                     chat_id = update["message"]["chat"]["id"]
                     if text == "/kill":
-                        return {"command": "kill", "chat_id": chat_id}
+                        return {"command": "kill",  "chat_id": chat_id}
                     elif text == "/start":
                         return {"command": "start", "chat_id": chat_id}
+                    elif text == "/status":
+                        return {"command": "status", "chat_id": chat_id}
+                    elif text == "/warcheck":
+                        return {"command": "warcheck", "chat_id": chat_id}
     except Exception as e:
-        print(f"[Telegram] Command check error: {e}")
+        print(f"[SeekerClaw] Command check error: {e}")
     return None
