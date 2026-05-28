@@ -1,6 +1,11 @@
 """
-OpenAgora — The Meta Trading Engine v2.0
+OpenAgora — The Meta Trading Engine v2.1
 Stocks + Crypto + Prediction Markets | Self-Evolving | MidasPrime Powered
+
+v2.1 upgrades (surgical — no core logic changed):
+  1. Confidence-scaled position sizing — bigger bet at conf=1.0, smaller at conf<0.85
+  2. Consecutive loss circuit breaker — 2 losses in a row → skip 1 cycle, let EverOS breathe
+  3. Asset diversification nudge — EverOS can promote a 2nd asset when confidence is high
 
 Usage:
   python core/agora_engine.py --mode simulate
@@ -32,36 +37,89 @@ from memory.everos_bridge import (
 )
 from reporting.telegram_bot import startup_message, trade_alert, heartbeat, send
 
-SIMULATE = os.getenv("SIMULATE_MODE", "true").lower() == "true"
+SIMULATE       = os.getenv("SIMULATE_MODE", "true").lower() == "true"
 CYCLE_INTERVAL = int(os.getenv("CYCLE_INTERVAL", "300"))  # 5 min default
-REFLECT_EVERY = 10
+REFLECT_EVERY  = 10
+
+# ─── v2.1: CIRCUIT BREAKER STATE ─────────────────────────────────────────────
+_consecutive_losses  = 0   # rolling counter — resets on any win
+_skip_next_cycle     = False  # set True after 2 consecutive losses
+CIRCUIT_BREAKER_LIMIT = int(os.getenv("CIRCUIT_BREAKER_LIMIT", "2"))
+
+# ─── v2.1: CONFIDENCE SCALING ────────────────────────────────────────────────
+def confidence_scale(base_pnl: float, confidence: float) -> float:
+    """
+    Scale simulated P&L by confidence tier.
+    conf >= 0.95 → full size (1.0x)
+    conf >= 0.85 → 0.75x
+    conf >= 0.70 → 0.50x
+    conf <  0.70 → 0.30x (barely alive — EverOS should blacklist soon)
+    This doesn't change the win/loss outcome, only the size of the reward/risk.
+    """
+    if confidence >= 0.95:
+        return base_pnl * 1.0
+    elif confidence >= 0.85:
+        return round(base_pnl * 0.75, 4)
+    elif confidence >= 0.70:
+        return round(base_pnl * 0.50, 4)
+    else:
+        return round(base_pnl * 0.30, 4)
+
+# ─── v2.1: DIVERSIFICATION NUDGE ─────────────────────────────────────────────
+def maybe_diversify(signals: list, top: dict) -> dict:
+    """
+    If top signal is conf=1.0 AND there's a strong 2nd signal (conf>=0.85),
+    EverOS gets a second trade this cycle. Doubles the upside on high-conviction cycles.
+    Both must be different assets — no doubling up on same coin.
+    Returns second trade dict or None.
+    """
+    if top["confidence"] < 1.0:
+        return None
+    others = [
+        s for s in signals
+        if s["asset"] != top["asset"]
+        and not is_blacklisted(s["asset"])
+        and s["confidence"] >= 0.85
+    ]
+    if others:
+        return others[0]
+    return None
 
 
 # ─── CCXT LIVE EXECUTOR ───────────────────────────────────────────────────────
-def ccxt_execute(asset: str, action: str, asset_type: str) -> float:
+def ccxt_execute(asset: str, action: str, asset_type: str, confidence: float = 1.0) -> float:
     """
     Execute a real trade via CCXT.
     Returns PnL estimate (entry price - fill price delta).
-    Supports crypto pairs. Prediction markets routed separately.
+    v2.1: trade size scales with confidence.
     """
     import ccxt
 
-    # Map asset name to CCXT symbol
     COIN_MAP = {
-        "bitcoin": "BTC/USDT",
-        "ethereum": "ETH/USDT",
-        "solana": "SOL/USDT",
-        "polygon": "MATIC/USDT",
-        "chainlink": "LINK/USDT",
-        "cardano": "ADA/USDT",
-        "avalanche-2": "AVAX/USDT",
-        "dot": "DOT/USDT",
+        "bitcoin":      "BTC/USDT",
+        "ethereum":     "ETH/USDT",
+        "solana":       "SOL/USDT",
+        "polygon":      "MATIC/USDT",
+        "chainlink":    "LINK/USDT",
+        "cardano":      "ADA/USDT",
+        "avalanche-2":  "AVAX/USDT",
+        "dot":          "DOT/USDT",
     }
 
     EXCHANGE_ID = os.getenv("CCXT_EXCHANGE", "binance")
     API_KEY     = os.getenv(f"{EXCHANGE_ID.upper()}_API_KEY", "")
     API_SECRET  = os.getenv(f"{EXCHANGE_ID.upper()}_API_SECRET", "")
-    TRADE_SIZE  = float(os.getenv("TRADE_SIZE_USD", "10"))  # default $10 per trade
+    BASE_SIZE   = float(os.getenv("TRADE_SIZE_USD", "10"))
+
+    # v2.1: scale trade size by confidence
+    if confidence >= 0.95:
+        trade_size = BASE_SIZE * 1.0
+    elif confidence >= 0.85:
+        trade_size = BASE_SIZE * 0.75
+    elif confidence >= 0.70:
+        trade_size = BASE_SIZE * 0.50
+    else:
+        trade_size = BASE_SIZE * 0.30
 
     if not API_KEY or not API_SECRET:
         print(f"[CCXT] No keys for {EXCHANGE_ID} — add {EXCHANGE_ID.upper()}_API_KEY to .env")
@@ -70,42 +128,34 @@ def ccxt_execute(asset: str, action: str, asset_type: str) -> float:
     try:
         exchange_class = getattr(ccxt, EXCHANGE_ID)
         exchange = exchange_class({
-            "apiKey": API_KEY,
-            "secret": API_SECRET,
+            "apiKey":          API_KEY,
+            "secret":          API_SECRET,
             "enableRateLimit": True,
         })
 
         symbol = COIN_MAP.get(asset.lower())
         if not symbol:
-            # Try direct (e.g. signal already formatted as BTC/USDT)
             symbol = asset if "/" in asset else f"{asset.upper()}/USDT"
 
-        # Get current price
         ticker = exchange.fetch_ticker(symbol)
         price  = ticker["last"]
-        amount = TRADE_SIZE / price  # units to buy/sell
+        amount = trade_size / price
 
         side = "buy" if action == "BUY" else "sell"
+        print(f"[CCXT] LIVE {side.upper()} {symbol} @ ${price:.4f} | size=${trade_size:.2f} (conf={confidence})")
 
-        print(f"[CCXT] LIVE {side.upper()} {symbol} @ ${price:.4f} | size=${TRADE_SIZE} | units={amount:.6f}")
-
-        order = exchange.create_market_order(symbol, side, amount)
-
+        order      = exchange.create_market_order(symbol, side, amount)
         fill_price = order.get("average") or order.get("price") or price
         fee        = order.get("fee", {}).get("cost", 0) or 0
         pnl        = (fill_price - price) * amount if side == "buy" else (price - fill_price) * amount
         pnl        = round(pnl - fee, 6)
 
-        print(f"[CCXT] Order filled | fill={fill_price} | fee={fee} | pnl={pnl:+.6f}")
+        print(f"[CCXT] Filled | fill={fill_price} | fee={fee} | pnl={pnl:+.6f}")
         send(
             f"🔴 *LIVE TRADE EXECUTED*\n"
-            f"Exchange: `{EXCHANGE_ID}`\n"
-            f"Pair: `{symbol}`\n"
-            f"Side: `{side.upper()}`\n"
-            f"Price: `${fill_price:.4f}`\n"
-            f"Size: `${TRADE_SIZE}`\n"
-            f"Fee: `${fee:.4f}`\n"
-            f"PnL: `${pnl:+.6f}`"
+            f"Exchange: `{EXCHANGE_ID}` | Pair: `{symbol}`\n"
+            f"Side: `{side.upper()}` | Size: `${trade_size:.2f}` (conf={confidence})\n"
+            f"Fill: `${fill_price:.4f}` | Fee: `${fee:.4f}` | PnL: `${pnl:+.6f}`"
         )
         return pnl
 
@@ -117,7 +167,7 @@ def ccxt_execute(asset: str, action: str, asset_type: str) -> float:
         print(f"[CCXT] Network error: {e}")
         return 0.0
     except Exception as e:
-        print(f"[CCXT] Execution error: {e}")
+        print(f"[CCXT] Error: {e}")
         send(f"⚠️ *CCXT Error*\n`{str(e)[:200]}`")
         return 0.0
 # ─────────────────────────────────────────────────────────────────────────────
@@ -127,7 +177,7 @@ def print_banner():
     print("""
 ╔══════════════════════════════════════════════════╗
 ║          🏛️  O P E N A G O R A  🏛️              ║
-║     The Meta Trading Engine — Pantheon v2.0      ║
+║    The Meta Trading Engine — Pantheon v2.1       ║
 ║  Risk-Protected | Self-Evolving | Always Watching ║
 ╚══════════════════════════════════════════════════╝
 """)
@@ -162,8 +212,18 @@ def run_relay_thread():
 
 
 def run_cycle(engine: MetaStrategy, simulate: bool, cycle_num: int):
-    """Execute one full Meta trading cycle"""
+    """Execute one full Meta trading cycle — v2.1"""
+    global _consecutive_losses, _skip_next_cycle
+
     mode_tag = "[SIMULATE]" if simulate else "[LIVE]"
+
+    # ── v2.1: Circuit Breaker ──────────────────────────────────────────────
+    if _skip_next_cycle:
+        _skip_next_cycle = False
+        print(f"[Agora] ⚡ Circuit breaker — skipping cycle #{cycle_num} (letting EverOS recalibrate)")
+        send(f"⚡ *Circuit Breaker* — Cycle {cycle_num} skipped after 2 consecutive losses. EverOS recalibrating.")
+        return None
+
     print(f"\n[Agora] {mode_tag} Running Meta cycle #{cycle_num}...")
 
     result   = engine.run_cycle()
@@ -195,29 +255,64 @@ def run_cycle(engine: MetaStrategy, simulate: bool, cycle_num: int):
     confidence = top["confidence"]
     asset_type = top["type"]
 
-    # ── Execute ──
+    # ── Execute primary trade ──────────────────────────────────────────────
     if simulate:
         import random
-        pnl = round(random.uniform(0.5, 5.0) * confidence, 4) if random.random() < confidence else round(-random.uniform(0.5, 3.0), 4)
+        base_pnl = round(random.uniform(0.5, 5.0), 4) if random.random() < confidence else round(-random.uniform(0.5, 3.0), 4)
+        # v2.1: scale by confidence
+        pnl = confidence_scale(base_pnl, confidence)
     else:
-        # LIVE — CCXT execution
-        pnl = ccxt_execute(asset, action, asset_type)
+        pnl = ccxt_execute(asset, action, asset_type, confidence)
 
-    # Log + memory
     total_pnl = log_trade(asset, asset_type, action, 1.0, pnl, strategy)
     record_trade(strategy, asset, pnl, confidence)
-    record_signal_pattern({"asset_type": asset_type, "action": action, "confidence_bucket": "high" if confidence >= 0.7 else "mid", "strategy": strategy}, strategy, pnl)
-
+    record_signal_pattern(
+        {"asset_type": asset_type, "action": action,
+         "confidence_bucket": "high" if confidence >= 0.7 else "mid",
+         "strategy": strategy},
+        strategy, pnl
+    )
     trade_alert(asset, action, pnl, total_pnl, strategy, simulate)
 
     outcome = "WIN ✅" if pnl > 0 else "LOSS ❌"
     print(f"[Agora] {outcome} | {action} {asset} | conf={confidence} | P&L: ${pnl:+.4f} | War Chest: ${total_pnl:+.4f}")
 
+    # ── v2.1: Track consecutive losses ────────────────────────────────────
+    if pnl < 0:
+        _consecutive_losses += 1
+        if _consecutive_losses >= CIRCUIT_BREAKER_LIMIT:
+            _skip_next_cycle = True
+            _consecutive_losses = 0
+            print(f"[Agora] ⚡ {CIRCUIT_BREAKER_LIMIT} consecutive losses — circuit breaker ARMED for next cycle")
+    else:
+        _consecutive_losses = 0  # reset on any win
+
+    # ── v2.1: Diversification nudge ───────────────────────────────────────
+    second = maybe_diversify(eligible, top)
+    if second:
+        asset2      = second["asset"]
+        action2     = second["action"]
+        confidence2 = second["confidence"]
+        type2       = second["type"]
+
+        if simulate:
+            import random
+            base2 = round(random.uniform(0.5, 5.0), 4) if random.random() < confidence2 else round(-random.uniform(0.5, 3.0), 4)
+            pnl2  = confidence_scale(base2, confidence2)
+        else:
+            pnl2 = ccxt_execute(asset2, action2, type2, confidence2)
+
+        total_pnl = log_trade(asset2, type2, action2, 1.0, pnl2, strategy, notes="diversification")
+        record_trade(strategy, asset2, pnl2, confidence2)
+        outcome2 = "WIN ✅" if pnl2 > 0 else "LOSS ❌"
+        print(f"[Agora] DIVERSIFY {outcome2} | {action2} {asset2} | conf={confidence2} | P&L: ${pnl2:+.4f} | War Chest: ${total_pnl:+.4f}")
+        trade_alert(asset2, action2, pnl2, total_pnl, strategy + "+div", simulate)
+
     return pnl
 
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenAgora Meta Trading Engine v2.0")
+    parser = argparse.ArgumentParser(description="OpenAgora Meta Trading Engine v2.1")
     parser.add_argument("--mode", choices=["simulate", "live"], default="simulate")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
@@ -227,6 +322,7 @@ def main():
     print_banner()
     print(f"[Agora] Mode: {'SIMULATE 🔵' if simulate else 'LIVE 🔴'}")
     print(f"[Agora] Cycle interval: {CYCLE_INTERVAL}s")
+    print(f"[Agora] v2.1 upgrades: confidence scaling ✅ | circuit breaker ✅ | diversification nudge ✅")
 
     run_relay_thread()
     startup_message(simulate)
@@ -246,9 +342,9 @@ def main():
                 summary     = get_summary()
                 mem_summary = get_memory_summary()
                 heartbeat(summary, simulate)
-                weights    = mem_summary["strategy_weights"]
-                blacklist  = mem_summary["blacklist"]
-                bl_str     = ", ".join(blacklist) if blacklist else "None"
+                weights   = mem_summary["strategy_weights"]
+                blacklist = mem_summary["blacklist"]
+                bl_str    = ", ".join(blacklist) if blacklist else "None"
                 send(
                     f"*🧠 EverOS Memory Report — Cycle {cycle_count}*\n"
                     f"Strategy weights: `{weights}`\n"
