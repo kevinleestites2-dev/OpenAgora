@@ -26,7 +26,10 @@ DECAY_FACTOR = 0.92     # older trades count 8% less per batch of 10 trades
 # ─────────────────────────────────────────
 
 def _load():
-    DEFAULTS = {
+    if os.path.exists(MEMORY_PATH):
+        with open(MEMORY_PATH, "r") as f:
+            return json.load(f)
+    return {
         "version": "2.0",
         "created": _now(),
         "strategy_stats": {},
@@ -37,15 +40,6 @@ def _load():
         "lessons": [],
         "cycle_count": 0
     }
-    if os.path.exists(MEMORY_PATH):
-        with open(MEMORY_PATH, "r") as f:
-            data = json.load(f)
-        # backfill any missing top-level keys (handles old memory files)
-        for k, v in DEFAULTS.items():
-            if k not in data:
-                data[k] = v
-        return data
-    return DEFAULTS
 
 
 def _save(data):
@@ -88,13 +82,13 @@ def record_trade(strategy: str, asset: str, pnl: float, confidence: float = 0.5)
         s["losses"] += 1
 
     # Append to rolling history (cap at 20)
-    s.setdefault("trade_history", []).append({"pnl": pnl, "ts": _now()})
-    if len(s.setdefault("trade_history", [])) > 20:
+    s["trade_history"].append({"pnl": pnl, "ts": _now()})
+    if len(s["trade_history"]) > 20:
         s["trade_history"].pop(0)
 
     # Recompute weighted score using decay
     score = 0.0
-    for i, t in enumerate(reversed(s.get("trade_history", []))):
+    for i, t in enumerate(reversed(s["trade_history"])):
         weight = DECAY_FACTOR ** i
         score += (1.0 if t["pnl"] > 0 else -0.5) * weight
     s["weighted_score"] = round(score, 4)
@@ -140,15 +134,35 @@ def get_strategy_weights() -> dict:
     Compute dynamic strategy weights.
     Uses recency-decayed weighted_score — recent wins dominate.
     Floors at 0.05 so no strategy is fully abandoned.
+
+    v3.1: Baseline entries for all known strategies so EverOS always
+    has alternatives to rotate to — even before a strategy has been traded.
+    New strategies start at a neutral 0.5 weighted_score (below the +2.0
+    offset baseline, so they rank below any strategy with real trade history).
     """
+    _KNOWN_STRATEGIES = ["mean_reversion", "momentum", "trend_follow", "arbitrage"]
+    _BASELINE_SCORE   = 0.5   # neutral — below a strategy with wins, above one bleeding
+
     mem = _load()
     stats = mem["strategy_stats"]
-    if not stats:
-        return {}
+
+    # Seed missing strategies with baseline so they always appear in weights
+    seeded = False
+    for strat in _KNOWN_STRATEGIES:
+        if strat not in stats:
+            stats[strat] = {
+                "trades": 0,
+                "wins": 0,
+                "total_pnl": 0.0,
+                "weighted_score": _BASELINE_SCORE,
+            }
+            seeded = True
+    if seeded:
+        _save(mem)
 
     weights = {}
     for strategy, data in stats.items():
-        raw_score = data.get("weighted_score", 1.0)
+        raw_score = data.get("weighted_score", _BASELINE_SCORE)
         weights[strategy] = max(0.05, raw_score + 2.0)
 
     total = sum(weights.values())

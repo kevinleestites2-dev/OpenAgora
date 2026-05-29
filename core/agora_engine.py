@@ -69,8 +69,8 @@ def _is_combo_banned(strategy: str, asset: str, current_cycle: int) -> bool:
     if key not in _combo_cooldown:
         return False
     banned_at = _combo_cooldown[key]
-    if current_cycle - banned_at >= COMBO_COOLDOWN_CYCLES:
-        # Cooldown expired — unban
+    if current_cycle - banned_at > COMBO_COOLDOWN_CYCLES:
+        # Cooldown expired — unban (ban covers banned_at+1 through banned_at+COOLDOWN inclusive)
         del _combo_cooldown[key]
         _combo_loss_streak[key] = 0
         send(
@@ -283,6 +283,19 @@ def run_cycle(engine: MetaStrategy, simulate: bool, cycle_num: int):
     strategy = _forced_strategy if _forced_strategy else result["strategy_selected"]
     if _forced_strategy:
         print(f"[Agora v3] Using forced strategy: {_forced_strategy}")
+        # ── v3.1: Combo ban check during forced cycles ────────────────────
+        # Circuit breaker does NOT bypass the combo blacklist — filter here first
+        signals = [
+            s for s in signals
+            if not _is_combo_banned(strategy, s["asset"], cycle_num)
+        ]
+        if not signals:
+            print(f"[Agora v3] All signals combo-banned during forced cycle #{cycle_num}. Waiting.")
+            send(
+                f"⚠️ *Forced Cycle {cycle_num} — All combos banned*\n"
+                f"Strategy `{strategy}` has no valid assets. Holding."
+            )
+            return None
 
     print(f"[Agora] Strategy: {strategy} | {len(signals)} signals")
 
