@@ -153,8 +153,10 @@ def get_strategy_weights() -> dict:
             stats[strat] = {
                 "trades": 0,
                 "wins": 0,
+                "losses": 0,
                 "total_pnl": 0.0,
                 "weighted_score": _BASELINE_SCORE,
+                "trade_history": [],
             }
             seeded = True
     if seeded:
@@ -327,3 +329,4 @@ def get_memory_summary() -> dict:
         "lesson_count": len(mem.get("lessons", [])),
         "last_lesson": mem["lessons"][-1]["lesson"] if mem.get("lessons") else "None"
     }
+
