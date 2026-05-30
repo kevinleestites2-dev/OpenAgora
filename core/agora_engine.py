@@ -322,7 +322,7 @@ def run_cycle(engine: MetaStrategy, simulate: bool, cycle_num: int):
         return None
 
     # Confidence gate
-    MIN_CONFIDENCE = float(os.getenv("MIN_CONFIDENCE", "0.5"))
+    MIN_CONFIDENCE = float(os.getenv("MIN_CONFIDENCE", "0.55"))
     eligible = [s for s in clean_signals if s["confidence"] >= MIN_CONFIDENCE]
 
     if not eligible:
