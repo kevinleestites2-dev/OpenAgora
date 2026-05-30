@@ -75,6 +75,9 @@ def record_trade(strategy: str, asset: str, pnl: float, confidence: float = 0.5)
             "trade_history": []
         }
     s = mem["strategy_stats"][strategy]
+    # ── Migration guard: heal any record missing v3.0 keys ──
+    s.setdefault("losses", 0)
+    s.setdefault("trade_history", [])
     s["total_pnl"] = round(s["total_pnl"] + pnl, 4)
     if pnl > 0:
         s["wins"] += 1
