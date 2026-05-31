@@ -21,10 +21,15 @@ class MetaStrategy:
     Now includes AI Training Strategy for self-improvement.
     """
 
+    # v3.1: asset rotation cap
+    ASSET_REPEAT_CAP = int(os.getenv("ASSET_REPEAT_CAP", "2"))
+
     def __init__(self):
         self.feed = MarketFeed()
         self.strategies = ["momentum", "arbitrage", "mean_reversion", "trend_follow", "training"]
         self.training = get_training_strategy()
+        self._last_asset = None
+        self._asset_repeat_count = 0
 
     def select_strategy(self):
         """Pick strategy based on historical win-rate weights"""
@@ -97,6 +102,24 @@ class MetaStrategy:
 
         all_signals = crypto_signals + pred_signals + training_signals
         all_signals.sort(key=lambda x: x["confidence"], reverse=True)
+
+        # v3.1: Asset rotation cap
+        if all_signals:
+            top_asset = all_signals[0]["asset"]
+            if top_asset == self._last_asset:
+                self._asset_repeat_count += 1
+            else:
+                self._asset_repeat_count = 1
+                self._last_asset = top_asset
+
+            if self._asset_repeat_count > self.ASSET_REPEAT_CAP:
+                alternates = [s for s in all_signals if s["asset"] != self._last_asset]
+                if alternates:
+                    all_signals = alternates + [s for s in all_signals if s["asset"] == self._last_asset]
+                    prev = self._last_asset
+                    self._last_asset = all_signals[0]["asset"]
+                    self._asset_repeat_count = 1
+                    print(f"[Agora v3.1] Asset cap hit — rotating away from {prev} -> {self._last_asset}")
 
         if all_signals:
             top = all_signals[0]
