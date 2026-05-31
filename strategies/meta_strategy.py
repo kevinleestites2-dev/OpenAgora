@@ -10,6 +10,8 @@ import json
 from memory.everos_bridge import get_strategy_weights, add_lesson
 from core.market_feed import MarketFeed
 from strategies.training_strategy import get_training_strategy, record_training_outcome, get_training_stats
+from strategies.rsi_reversal import analyze_rsi
+from strategies.breakout import analyze_breakout
 import random
 
 
@@ -26,7 +28,7 @@ class MetaStrategy:
 
     def __init__(self):
         self.feed = MarketFeed()
-        self.strategies = ["momentum", "arbitrage", "mean_reversion", "trend_follow", "training"]
+        self.strategies = ["momentum", "rsi_reversal", "mean_reversion", "breakout", "training"]
         self.training = get_training_strategy()
         self._last_asset = None
         self._asset_repeat_count = 0
@@ -99,6 +101,16 @@ class MetaStrategy:
         pred_signals = self.analyze_prediction_markets(snapshot.get("prediction_markets", []))
         training_analysis = self.training.analyze_with_ai(snapshot.get("crypto", {}), "crypto")
         training_signals = training_analysis.get("signals", [])
+
+        # v3.2: strategy-specific signal generation
+        if strategy == "rsi_reversal":
+            rsi_sigs = analyze_rsi(self.feed)
+            if rsi_sigs:
+                crypto_signals = rsi_sigs
+        elif strategy == "breakout":
+            bo_sigs = analyze_breakout(self.feed)
+            if bo_sigs:
+                crypto_signals = bo_sigs
 
         all_signals = crypto_signals + pred_signals + training_signals
         all_signals.sort(key=lambda x: x["confidence"], reverse=True)
