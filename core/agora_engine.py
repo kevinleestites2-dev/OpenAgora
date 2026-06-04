@@ -218,7 +218,7 @@ def print_banner():
     print("""
 ╔══════════════════════════════════════════════════╗
 ║          🏛️  O P E N A G O R A  🏛️              ║
-║    The Meta Trading Engine — Pantheon v3.2       ║
+║    The Meta Trading Engine — Pantheon v3.0       ║
 ║  Combo Blacklist | Strategy Rotation | Always On ║
 ╚══════════════════════════════════════════════════╝
 """)
