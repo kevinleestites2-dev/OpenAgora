@@ -9,7 +9,7 @@ import requests
 from datetime import datetime
 
 # SeekerClaw — OpenAgora's dedicated Telegram bot
-TELEGRAM_TOKEN   = os.getenv("AGORA_TELEGRAM_TOKEN", "8847391123:AAEvnj4sEtJABzxBE3jqP0IhhybQAwCL6q4")
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("AGORA_TELEGRAM_TOKEN", "8847391123:AAEvnj4sEtJABzxBE3jqP0IhhybQAwCL6q4")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7135054241")
 
 
