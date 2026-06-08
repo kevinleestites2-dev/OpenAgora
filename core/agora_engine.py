@@ -40,6 +40,7 @@ from memory.everos_bridge import (
     add_lesson
 )
 from reporting.telegram_bot import startup_message, trade_alert, heartbeat, send
+from github_sync import pull as war_chest_pull, push as war_chest_push
 
 SIMULATE       = os.getenv("SIMULATE_MODE", "true").lower() == "true"
 CYCLE_INTERVAL = int(os.getenv("CYCLE_INTERVAL", "300"))
@@ -215,6 +216,7 @@ def ccxt_execute(asset: str, action: str, asset_type: str, confidence: float = 1
 
 
 def print_banner():
+    war_chest_pull()  # Restore persistent memory from GitHub
     print("""
 ╔══════════════════════════════════════════════════╗
 ║          🏛️  O P E N A G O R A  🏛️              ║
@@ -476,6 +478,7 @@ def main():
 '
                     f'Win Rate:  ({wins}W / {losses}L)'
                 )
+                war_chest_push(f'Cycle {cycle_count} complete')
                 print('[Agora] --once flag. Exiting.')
                 break
 
