@@ -457,8 +457,8 @@ def main():
 
             if args.once:
                 summary = get_summary()
-                wins    = summary.get('total_wins',  0)
-                losses  = summary.get('total_losses', 0)
+                wins    = summary.get('wins', 0)
+                losses  = summary.get('losses', 0)
                 total   = wins + losses
                 rate    = f'{wins/total*100:.1f}%' if total > 0 else 'N/A'
                 send(
