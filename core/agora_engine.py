@@ -456,7 +456,27 @@ def main():
                 )
 
             if args.once:
-                print("[Agora] --once flag. Exiting.")
+                summary = get_summary()
+                wins    = summary.get('total_wins',  0)
+                losses  = summary.get('total_losses', 0)
+                total   = wins + losses
+                rate    = f'{wins/total*100:.1f}%' if total > 0 else 'N/A'
+                send(
+                    f'*🏛️ OpenAgora — Cycle {cycle_count} Complete*
+'
+                    f'Mode: {"SIMULATE 🔵" if simulate else "LIVE 🔴"}
+'
+                    f'Result: {"✅ WIN" if (summary.get("last_pnl", 0) or 0) >= 0 else "❌ LOSS"}
+'
+                    f'This cycle PnL: 
+'
+                    f'War Chest: 
+'
+                    f'Total Trades: 
+'
+                    f'Win Rate:  ({wins}W / {losses}L)'
+                )
+                print('[Agora] --once flag. Exiting.')
                 break
 
             print(f"[Agora] Sleeping {CYCLE_INTERVAL}s...")
