@@ -1,5 +1,5 @@
 {
-  "total_pnl": 6.1715,
+  "total_pnl": 9.8977,
   "trades": [
     {
       "timestamp": "2026-06-09T14:11:36.885822",
@@ -50,7 +50,17 @@
       "pnl": -1.2288,
       "strategy": "momentum",
       "notes": ""
+    },
+    {
+      "timestamp": "2026-06-09T22:45:32.798599",
+      "asset": "cardano",
+      "asset_type": "crypto",
+      "action": "SELL",
+      "amount": 1.0,
+      "pnl": 3.7262,
+      "strategy": "mean_reversion",
+      "notes": ""
     }
   ],
-  "last_updated": "2026-06-09T21:05:24.397821"
+  "last_updated": "2026-06-09T22:45:32.798604"
 }
