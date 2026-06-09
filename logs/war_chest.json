@@ -1,5 +1,5 @@
 {
-  "total_pnl": 3.6597,
+  "total_pnl": 7.4003,
   "trades": [
     {
       "timestamp": "2026-06-09T14:11:36.885822",
@@ -30,7 +30,17 @@
       "pnl": 2.8363,
       "strategy": "mean_reversion",
       "notes": "diversification"
+    },
+    {
+      "timestamp": "2026-06-09T19:03:19.612426",
+      "asset": "solana",
+      "asset_type": "crypto",
+      "action": "SELL",
+      "amount": 1.0,
+      "pnl": 3.7406,
+      "strategy": "mean_reversion",
+      "notes": ""
     }
   ],
-  "last_updated": "2026-06-09T16:47:48.107948"
+  "last_updated": "2026-06-09T19:03:19.612432"
 }
