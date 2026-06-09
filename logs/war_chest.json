@@ -1,0 +1,16 @@
+{
+  "total_pnl": 0.2041,
+  "trades": [
+    {
+      "timestamp": "2026-06-09T14:11:36.885822",
+      "asset": "bitcoin",
+      "asset_type": "crypto",
+      "action": "SELL",
+      "amount": 1.0,
+      "pnl": 0.2041,
+      "strategy": "mean_reversion",
+      "notes": ""
+    }
+  ],
+  "last_updated": "2026-06-09T14:11:36.885828"
+}
