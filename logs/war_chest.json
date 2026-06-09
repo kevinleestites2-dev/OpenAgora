@@ -1,5 +1,5 @@
 {
-  "total_pnl": 7.4003,
+  "total_pnl": 6.1715,
   "trades": [
     {
       "timestamp": "2026-06-09T14:11:36.885822",
@@ -40,7 +40,17 @@
       "pnl": 3.7406,
       "strategy": "mean_reversion",
       "notes": ""
+    },
+    {
+      "timestamp": "2026-06-09T21:05:24.397815",
+      "asset": "ethereum",
+      "asset_type": "crypto",
+      "action": "SELL",
+      "amount": 1.0,
+      "pnl": -1.2288,
+      "strategy": "momentum",
+      "notes": ""
     }
   ],
-  "last_updated": "2026-06-09T19:03:19.612432"
+  "last_updated": "2026-06-09T21:05:24.397821"
 }
