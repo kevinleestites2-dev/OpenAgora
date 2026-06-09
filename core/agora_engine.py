@@ -463,21 +463,21 @@ def main():
                 losses  = summary.get('losses', 0)
                 total   = wins + losses
                 rate    = f'{wins/total*100:.1f}%' if total > 0 else 'N/A'
-                send(
-                    f'*🏛️ OpenAgora — Cycle {cycle_count} Complete*
-'
-                    f'Mode: {"SIMULATE 🔵" if simulate else "LIVE 🔴"}
-'
-                    f'Result: {"✅ WIN" if (summary.get("last_pnl", 0) or 0) >= 0 else "❌ LOSS"}
-'
-                    f'This cycle PnL: 
-'
-                    f'War Chest: 
-'
-                    f'Total Trades: 
-'
-                    f'Win Rate:  ({wins}W / {losses}L)'
+                mode_str   = "SIMULATE 🔵" if simulate else "LIVE 🔴"
+                result_str = "✅ WIN" if (summary.get("last_pnl", 0) or 0) >= 0 else "❌ LOSS"
+                pnl_val    = summary.get("last_pnl", 0) or 0
+                chest_val  = summary.get("total_pnl", 0) or 0
+                trades_val = summary.get("total_trades", 0) or 0
+                msg = (
+                    "*🏛️ OpenAgora — Cycle " + str(cycle_count) + " Complete*\n"
+                    + "Mode: " + mode_str + "\n"
+                    + "Result: " + result_str + "\n"
+                    + f"This cycle PnL: ${pnl_val:+.4f}\n"
+                    + f"War Chest: ${chest_val:+.4f}\n"
+                    + f"Total Trades: {trades_val}\n"
+                    + f"Win Rate: {rate} ({wins}W / {losses}L)"
                 )
+                send(msg)
                 war_chest_push(f'Cycle {cycle_count} complete')
                 print('[Agora] --once flag. Exiting.')
                 break
