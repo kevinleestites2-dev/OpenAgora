@@ -11,6 +11,26 @@ Upgrades over v1:
 """
 
 import json
+
+# ── QuantMind Research Intelligence Bridge (2026-06-10) ──────────────────────
+import sys as _sys, os as _os
+
+_QM_BRIDGE = None
+
+def _get_qm():
+    global _QM_BRIDGE
+    if _QM_BRIDGE is None:
+        try:
+            _bd = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+            if _bd not in _sys.path:
+                _sys.path.insert(0, _bd)
+            from quantmind_prime_bridge import get_research_signal
+            _QM_BRIDGE = get_research_signal
+        except Exception as _e:
+            print("[EverOS] QuantMind not loaded:", _e)
+            _QM_BRIDGE = lambda topic, ctx="": ""
+    return _QM_BRIDGE
+
 import os
 import urllib.request
 from datetime import datetime, timezone
@@ -330,21 +350,12 @@ def reflect(cycle: int):
         f"{asset_note} | {bl_note} | Calibration: {cal_note}"
     )
 
-    # ── Fable 5 Strategic Insight ────────────────────────────────────────────
-    fable_prompt = (
-        "You are OpenAgora, a self-evolving trading engine. Cycle "
-        + str(cycle) + " reflection:\n"
-        "Best strategy: " + best[0]
-        + " (score=" + str(round(best[1].get("weighted_score", 0), 3)) + ")\n"
-        "Worst strategy: " + worst[0]
-        + " (score=" + str(round(worst[1].get("weighted_score", 0), 3)) + ")\n"
-        + asset_note + " | " + bl_note + "\n"
-        "Calibration: " + cal_note + "\n"
-        "In 2 sentences: what should change in strategy selection next cycle? Be specific."
-    )
-    fable_insight = _fable5(fable_prompt, max_tokens=120)
-    if fable_insight:
-        lesson += " | Fable5: " + fable_insight
+    # ── QuantMind Research Signal (2026-06-10) ───────────────────────────────
+    _qm_ctx = f"Best:{best[0]} | {asset_note}"
+    _qm_topic = f"prediction market trading {best[0].replace('_', ' ')}"
+    _qm_signal = _get_qm()(_qm_topic, _qm_ctx)
+    if _qm_signal:
+        lesson += f" | QuantMind: {_qm_signal[:250]}"
 
     # ── Fable 5 Strategic Insight ────────────────────────────────────────────
     fable_prompt = (
@@ -353,9 +364,10 @@ def reflect(cycle: int):
         f"Worst strategy: {worst[0]} (score={worst[1].get('weighted_score',0):.3f})\n"
         f"{asset_note} | {bl_note}\n"
         f"Calibration: {cal_note}\n"
+        f"Research context: {_qm_signal[:200] if _qm_signal else 'none'}\n"
         f"In 2 sentences: what should change in strategy selection next cycle? Be specific."
     )
-    fable_insight = _fable5(fable_prompt, max_tokens=120)
+    fable_insight = _fable5(fable_prompt, max_tokens=150)
     if fable_insight:
         lesson += f" | Fable5: {fable_insight}"
 
