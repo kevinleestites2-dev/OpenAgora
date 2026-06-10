@@ -12,7 +12,36 @@ Upgrades over v1:
 
 import json
 import os
+import urllib.request
 from datetime import datetime, timezone
+
+# ── Fable 5 Brain (injected 2026-06-10) ──────────────────────────────────────
+_OR_KEY   = os.environ.get("OPENROUTER_API_KEY", "")
+_OR_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-fable-5")
+
+def _fable5(prompt: str, max_tokens: int = 200) -> str:
+    if not _OR_KEY:
+        return None
+    try:
+        payload = json.dumps({
+            "model": _OR_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens
+        }).encode()
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {_OR_KEY}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/kevinleestites2-dev",
+                "X-Title": "OpenAgora-EverOS"
+            }, method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return json.loads(r.read())["choices"][0]["message"]["content"].strip()
+    except Exception as e:
+        return None
 
 
 MEMORY_PATH = "memory/trade_memory.json"
@@ -300,6 +329,37 @@ def reflect(cycle: int):
         f"Worst: {worst[0]} (score={worst[1].get('weighted_score', 0):.3f}) | "
         f"{asset_note} | {bl_note} | Calibration: {cal_note}"
     )
+
+    # ── Fable 5 Strategic Insight ────────────────────────────────────────────
+    fable_insight = _fable5(
+        f"You are OpenAgora, a self-evolving trading engine. Cycle {cycle} reflection:
+"
+        f"Best strategy: {best[0]} (score={best[1].get('weighted_score',0):.3f})
+"
+        f"Worst strategy: {worst[0]} (score={worst[1].get('weighted_score',0):.3f})
+"
+        f"{asset_note} | {bl_note}
+"
+        f"Calibration: {cal_note}
+"
+        f"In 2 sentences: what should change in strategy selection next cycle? Be specific.",
+        max_tokens=120
+    )
+    if fable_insight:
+        lesson += f" | Fable5: {fable_insight}"
+
+    # ── Fable 5 Strategic Insight ────────────────────────────────────────────
+    fable_prompt = (
+        f"You are OpenAgora, a self-evolving trading engine. Cycle {cycle} reflection:\n"
+        f"Best strategy: {best[0]} (score={best[1].get('weighted_score',0):.3f})\n"
+        f"Worst strategy: {worst[0]} (score={worst[1].get('weighted_score',0):.3f})\n"
+        f"{asset_note} | {bl_note}\n"
+        f"Calibration: {cal_note}\n"
+        f"In 2 sentences: what should change in strategy selection next cycle? Be specific."
+    )
+    fable_insight = _fable5(fable_prompt, max_tokens=120)
+    if fable_insight:
+        lesson += f" | Fable5: {fable_insight}"
 
     add_lesson(lesson)
     print(f"[EverOS] Reflection written at cycle {cycle}")
