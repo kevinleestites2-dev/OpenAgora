@@ -6,7 +6,64 @@ Enhanced with risk management: stop loss, daily drawdown, position sizing, kill 
 
 import json
 import os
+import base64
+import urllib.request
 from datetime import datetime, timedelta
+
+# ── GitHub Persistence (2026-06-10) ──────────────────────────────────────────
+_GH_TOKEN  = os.getenv("GITHUB_TOKEN", os.getenv("GH_PAT", ""))
+_GH_REPO   = os.getenv("GH_REPO", "kevinleestites2-dev/OpenAgora")
+_GH_PATH   = "logs/war_chest.json"
+_SYNC_EVERY = int(os.getenv("WAR_CHEST_SYNC_EVERY", "3"))  # sync every N trades
+_sync_counter = 0
+
+def _gh_sync(data):
+    """Push war_chest.json to GitHub so restarts resume from real state."""
+    if not _GH_TOKEN:
+        return
+    try:
+        # Get current SHA
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_PATH}",
+            headers={"Authorization": f"Bearer {_GH_TOKEN}", "Accept": "application/vnd.github+json"},
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            sha = json.loads(r.read())["sha"]
+        # Push updated content
+        body_str = json.dumps(data, indent=2)
+        payload  = json.dumps({
+            "message": f"[AutoSync] War Chest — total_pnl=${data.get('total_pnl',0):.4f}",
+            "content": base64.b64encode(body_str.encode()).decode(),
+            "sha": sha
+        }).encode()
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_PATH}",
+            data=payload,
+            headers={"Authorization": f"Bearer {_GH_TOKEN}", "Content-Type": "application/json"},
+            method="PUT"
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            pass  # 200/201 = success
+    except Exception as e:
+        print(f"[WarChest] GitHub sync failed: {e}")
+
+def _load_from_gh():
+    """Pull war_chest.json from GitHub on startup if local file is missing/stale."""
+    if not _GH_TOKEN:
+        return None
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_PATH}",
+            headers={"Authorization": f"Bearer {_GH_TOKEN}", "Accept": "application/vnd.github+json"},
+            method="GET"
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read())
+        return json.loads(base64.b64decode(d["content"]).decode())
+    except Exception as e:
+        print(f"[WarChest] GitHub load failed: {e}")
+        return None
 
 
 WAR_CHEST_PATH = os.getenv("WAR_CHEST_PATH", "logs/war_chest.json")
@@ -22,13 +79,25 @@ def _load():
     if os.path.exists(WAR_CHEST_PATH):
         with open(WAR_CHEST_PATH, "r") as f:
             return json.load(f)
+    # Local file missing — pull from GitHub before starting fresh
+    gh_data = _load_from_gh()
+    if gh_data:
+        print(f"[WarChest] Restored from GitHub — total_pnl=${gh_data.get('total_pnl',0):.4f}")
+        _save(gh_data)
+        return gh_data
     return {"total_pnl": 0.0, "trades": [], "last_updated": None}
 
 
 def _save(data):
+    global _sync_counter
     os.makedirs(os.path.dirname(WAR_CHEST_PATH), exist_ok=True)
     with open(WAR_CHEST_PATH, "w") as f:
         json.dump(data, f, indent=2)
+    # Sync to GitHub every N trades
+    _sync_counter += 1
+    if _sync_counter >= _SYNC_EVERY:
+        _sync_counter = 0
+        _gh_sync(data)
 
 
 def log_trade(asset, asset_type, action, amount, pnl, strategy, notes=""):
