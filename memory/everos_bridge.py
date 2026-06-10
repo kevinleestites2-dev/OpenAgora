@@ -331,22 +331,20 @@ def reflect(cycle: int):
     )
 
     # ── Fable 5 Strategic Insight ────────────────────────────────────────────
-    fable_insight = _fable5(
-        f"You are OpenAgora, a self-evolving trading engine. Cycle {cycle} reflection:
-"
-        f"Best strategy: {best[0]} (score={best[1].get('weighted_score',0):.3f})
-"
-        f"Worst strategy: {worst[0]} (score={worst[1].get('weighted_score',0):.3f})
-"
-        f"{asset_note} | {bl_note}
-"
-        f"Calibration: {cal_note}
-"
-        f"In 2 sentences: what should change in strategy selection next cycle? Be specific.",
-        max_tokens=120
+    fable_prompt = (
+        "You are OpenAgora, a self-evolving trading engine. Cycle "
+        + str(cycle) + " reflection:\n"
+        "Best strategy: " + best[0]
+        + " (score=" + str(round(best[1].get("weighted_score", 0), 3)) + ")\n"
+        "Worst strategy: " + worst[0]
+        + " (score=" + str(round(worst[1].get("weighted_score", 0), 3)) + ")\n"
+        + asset_note + " | " + bl_note + "\n"
+        "Calibration: " + cal_note + "\n"
+        "In 2 sentences: what should change in strategy selection next cycle? Be specific."
     )
+    fable_insight = _fable5(fable_prompt, max_tokens=120)
     if fable_insight:
-        lesson += f" | Fable5: {fable_insight}"
+        lesson += " | Fable5: " + fable_insight
 
     # ── Fable 5 Strategic Insight ────────────────────────────────────────────
     fable_prompt = (
