@@ -1,5 +1,5 @@
 {
-  "total_pnl": 19.6308,
+  "total_pnl": 19.0451,
   "trades": [
     {
       "timestamp": "2026-06-09T14:11:36.885822",
@@ -130,7 +130,17 @@
       "pnl": 1.1557,
       "strategy": "momentum",
       "notes": "diversification"
+    },
+    {
+      "timestamp": "2026-06-10T15:25:37.876545",
+      "asset": "bitcoin",
+      "asset_type": "crypto",
+      "action": "BUY",
+      "amount": 1.0,
+      "pnl": -0.5857,
+      "strategy": "mean_reversion",
+      "notes": ""
     }
   ],
-  "last_updated": "2026-06-10T11:56:00.276480"
+  "last_updated": "2026-06-10T15:25:37.876551"
 }
