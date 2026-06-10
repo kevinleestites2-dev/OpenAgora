@@ -1,7 +1,7 @@
 """
 OpenAgora — EverOS Memory Bridge v2.2
 Self-Evolving Meta Brain.
-v2.2: ROBUST ATOMIC SAVING + QuantMind + Fable 5
+v2.2: ROBUST ATOMIC SAVING + QuantMind + Fable 5 + REPORTERS
 """
 
 import json
@@ -63,6 +63,7 @@ def _load():
             for i in range(len(content), 0, -1):
                 try:
                     data = json.loads(content[:i])
+                    print("[EverOS] Repair success.")
                     _save(data)
                     return data
                 except: continue
@@ -113,6 +114,22 @@ def get_strategy_weights():
     total = sum(weights.values())
     return {k: round(v/total, 4) for k, v in weights.items()}
 
+# --- Reporters Restore ---
+def get_top_assets(n=3):
+    mem = _load()
+    assets = mem.get("asset_performance", {})
+    sorted_assets = sorted(assets.items(), key=lambda x: x[1].get("total_pnl", 0), reverse=True)
+    return sorted_assets[:n]
+
+def get_calibration_report():
+    return "2.2 Calibration Active"
+
 def get_memory_summary():
     mem = _load()
-    return {"cycle_count": mem.get("cycle_count", 0), "lesson_count": len(mem.get("lessons", [])), "last_lesson": mem["lessons"][-1]["lesson"] if mem["lessons"] else "None"}
+    weights = get_strategy_weights()
+    return {
+        "cycle_count": mem.get("cycle_count", 0),
+        "strategy_weights": weights,
+        "lesson_count": len(mem.get("lessons", [])),
+        "last_lesson": mem["lessons"][-1]["lesson"] if mem.get("lessons") else "None"
+    }
