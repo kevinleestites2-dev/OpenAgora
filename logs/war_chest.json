@@ -1,5 +1,5 @@
 {
-  "total_pnl": 16.5823,
+  "total_pnl": 19.6308,
   "trades": [
     {
       "timestamp": "2026-06-09T14:11:36.885822",
@@ -110,7 +110,27 @@
       "pnl": 1.1434,
       "strategy": "momentum",
       "notes": "diversification"
+    },
+    {
+      "timestamp": "2026-06-10T11:55:59.661509",
+      "asset": "cardano",
+      "asset_type": "crypto",
+      "action": "SELL",
+      "amount": 1.0,
+      "pnl": 1.8928,
+      "strategy": "momentum",
+      "notes": ""
+    },
+    {
+      "timestamp": "2026-06-10T11:56:00.276472",
+      "asset": "solana",
+      "asset_type": "crypto",
+      "action": "SELL",
+      "amount": 1.0,
+      "pnl": 1.1557,
+      "strategy": "momentum",
+      "notes": "diversification"
     }
   ],
-  "last_updated": "2026-06-10T08:35:31.353052"
+  "last_updated": "2026-06-10T11:56:00.276480"
 }
